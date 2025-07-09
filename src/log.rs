@@ -87,10 +87,45 @@ impl Redo {
                 .context("mmap log file")?
         };
 
+        if Self::check_multiple_log_files(config, log_size).context("check_multiple_log_files")? {
+            // Multiple ones are possible if we are upgrading from before MariaDB Server 10.5.1.
+            // We do not support that.
+            return Err(anyhow::anyhow!(
+                "multiple redo log files found. upgrading from before MariaDB Server 10.5.1 is not supported"
+            ));
+        }
+
         Ok(Redo { mmap })
     }
 
     pub fn buf(&self) -> &[u8] {
         self.mmap.as_slice()
+    }
+
+    fn check_multiple_log_files(config: &Config, size: u64) -> anyhow::Result<bool> {
+        let mut found = false;
+
+        for i in 1..101 {
+            let log_file_x_path = config.get_log_file_x_path(i);
+            if !log_file_x_path.exists() {
+                break;
+            }
+
+            found = true;
+
+            let file = std::fs::File::open(&log_file_x_path)
+                .with_context(|| format!("open log file at {}", log_file_x_path.display()))?;
+            let file_meta = file.metadata().context("get metadata for log file")?;
+            let file_size = file_meta.len();
+
+            if file_size != size {
+                return Err(anyhow::anyhow!(
+                    "log file {path} has unexpected size: {file_size} bytes, expected {size} bytes. all log files in a group must have the same size",
+                    path = log_file_x_path.display(),
+                ));
+            }
+        }
+
+        Ok(found)
     }
 }
