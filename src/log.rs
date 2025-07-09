@@ -1,5 +1,6 @@
-pub const LOG_FILE_NAME_PREFIX: &str = "ib_logfile";
-pub const LOG_FILE_NAME: &str = "ib_logfile0";
+use anyhow::Context;
+
+use crate::config::Config;
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.
 pub type Lsn = u64;
@@ -50,3 +51,30 @@ pub const START_OFFSET: Lsn = 12288;
 /// smallest possible log sequence number in the current format
 /// (used to be 2048 before FORMAT_10_8).
 pub const FIRST_LSN: Lsn = START_OFFSET;
+
+/// Size of a FILE_CHECKPOINT record, including the trailing byte to
+/// terminate the mini-transaction and the CRC-32C.
+pub const SIZE_OF_FILE_CHECKPOINT: u64 = 3/*type,page_id*/ + 8/*LSN*/ + 1 + 4;
+
+pub struct Redo {}
+
+impl Redo {
+    pub fn open(config: &Config) -> anyhow::Result<Redo> {
+        let log_file_path = config.get_log_file_path();
+        let log_file = std::fs::File::open(&log_file_path)
+            .with_context(|| format!("open log file at {}", log_file_path.display()))?;
+        let log_meta = log_file.metadata().context("get metadata for log a file")?;
+        let log_size = log_meta.len();
+
+        if log_size < START_OFFSET + SIZE_OF_FILE_CHECKPOINT {
+            return Err(anyhow::anyhow!(
+                "log file {} is too small: {} bytes, expected at least {} bytes",
+                log_file_path.display(),
+                log_size,
+                START_OFFSET + SIZE_OF_FILE_CHECKPOINT
+            ));
+        }
+
+        Ok(Redo {})
+    }
+}
