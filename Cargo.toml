@@ -7,3 +7,4 @@ edition = "2024"
 anyhow = "1"
 byteorder = "1"
 clap = { version = "4.0", features = ["derive"] }
+mmap-rs = "0.6"

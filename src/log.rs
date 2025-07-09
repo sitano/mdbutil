@@ -1,4 +1,5 @@
 use anyhow::Context;
+use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
 use crate::config::Config;
 
@@ -56,7 +57,9 @@ pub const FIRST_LSN: Lsn = START_OFFSET;
 /// terminate the mini-transaction and the CRC-32C.
 pub const SIZE_OF_FILE_CHECKPOINT: u64 = 3/*type,page_id*/ + 8/*LSN*/ + 1 + 4;
 
-pub struct Redo {}
+pub struct Redo {
+    mmap: Mmap,
+}
 
 impl Redo {
     pub fn open(config: &Config) -> anyhow::Result<Redo> {
@@ -75,6 +78,19 @@ impl Redo {
             ));
         }
 
-        Ok(Redo {})
+        let mmap = unsafe {
+            MmapOptions::new(log_size as usize)
+                .context("mmap option")?
+                .with_file(&log_file, 0u64)
+                .with_flags(MmapFlags::SHARED)
+                .map()
+                .context("mmap log file")?
+        };
+
+        Ok(Redo { mmap })
+    }
+
+    pub fn buf(&self) -> &[u8] {
+        self.mmap.as_slice()
     }
 }
