@@ -1,7 +1,9 @@
 use anyhow::Context;
+use anyhow::bail;
+use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
-use crate::config::Config;
+use crate::{config::Config, mach};
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.
 pub type Lsn = u64;
@@ -59,6 +61,32 @@ pub const SIZE_OF_FILE_CHECKPOINT: u64 = 3/*type,page_id*/ + 8/*LSN*/ + 1 + 4;
 
 pub struct Redo {
     mmap: Mmap,
+}
+
+// Offsets of a log file header.
+//
+// Log file header format identifier (32-bit unsigned big-endian integer).
+// This used to be called LOG_GROUP_ID and always written as 0,
+// because InnoDB never supported more than one copy of the redo log.
+pub const LOG_HEADER_FORMAT: usize = 0;
+// LSN of the start of data in this log file (with format version 1;
+// in format version 0, it was called LOG_FILE_START_LSN and at offset 4).
+pub const LOG_HEADER_START_LSN: usize = 8;
+// A null-terminated string which will contain either the string 'ibbackup'
+// and the creation time if the log file was created by mysqlbackup --restore,
+// or the MySQL version that created the redo log file.
+pub const LOG_HEADER_CREATOR: usize = 16;
+// End of the log file creator field.
+pub const LOG_HEADER_CREATOR_END: usize = 48;
+// CRC-32C checksum of the log file header.
+pub const LOG_HEADER_CRC: usize = 508;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedoHeader {
+    pub version: u32,
+    pub first_lsn: Lsn,
+    pub creator: String,
+    pub crc: u32,
 }
 
 impl Redo {
@@ -127,5 +155,50 @@ impl Redo {
         }
 
         Ok(found)
+    }
+
+    pub fn parse_header(&self) -> anyhow::Result<RedoHeader> {
+        let buf = self.buf();
+
+        if buf.len() < 512 {
+            return Err(anyhow::anyhow!(
+                "log file is too small to contain a header (< 512)"
+            ));
+        }
+
+        let version = mach::mach_read_from_4(&buf[LOG_HEADER_FORMAT..]);
+        let first_lsn: Lsn = mach::mach_read_from_8(&buf[LOG_HEADER_START_LSN..]);
+        let creator = String::from_utf8_lossy(&buf[LOG_HEADER_CREATOR..LOG_HEADER_CREATOR_END])
+            .trim_end_matches('\0')
+            .to_string();
+        let crc = mach::mach_read_from_4(&buf[LOG_HEADER_CRC..]);
+
+        // TODO: verify the version is latest or at least that one that use crc32c checksum.
+
+        {
+            let (ok, hdr_crc) = RedoHeader::verify_checksum(buf, crc);
+            if !ok {
+                bail!("log file header checksum mismatch: expected {crc}, got {hdr_crc}");
+            }
+        }
+
+        Ok(RedoHeader {
+            version,
+            first_lsn,
+            creator,
+            crc,
+        })
+    }
+}
+
+impl RedoHeader {
+    pub fn verify_checksum(buf: &[u8], crc: u32) -> (bool, u32) {
+        if buf.len() < LOG_HEADER_CRC {
+            return (false, 0);
+        }
+
+        let new = crc32c(&buf[0..LOG_HEADER_CRC]);
+
+        (new == crc, new)
     }
 }
