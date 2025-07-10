@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Context;
 use anyhow::bail;
 use crc32c::crc32c;
@@ -27,14 +29,16 @@ pub const BUF_SIZE_MAX: usize = OS_FILE_REQUEST_SIZE_MAX;
 pub const FORMAT_3_23: u32 = 0;
 /// The MySQL 5.7.9/MariaDB 10.2.2 log format
 pub const FORMAT_10_2: u32 = 1;
+pub const FORMAT_ENC_10_2: u32 = FORMAT_10_2 | FORMAT_ENCRYPTED;
 /// The MariaDB 10.3.2 log format.
 pub const FORMAT_10_3: u32 = 103;
+pub const FORMAT_ENC_10_3: u32 = FORMAT_10_3 | FORMAT_ENCRYPTED;
 /// The MariaDB 10.4.0 log format.
 pub const FORMAT_10_4: u32 = 104;
-/// Encrypted MariaDB redo log
-pub const FORMAT_ENCRYPTED: u32 = 1u32 << 31;
 /// The MariaDB 10.4.0 log format (only with innodb_encrypt_log=ON)
 pub const FORMAT_ENC_10_4: u32 = FORMAT_10_4 | FORMAT_ENCRYPTED;
+/// Encrypted MariaDB redo log
+pub const FORMAT_ENCRYPTED: u32 = 1u32 << 31;
 /// The MariaDB 10.5.1 physical redo log format
 pub const FORMAT_10_5: u32 = 0x5048_5953;
 /// The MariaDB 10.5.1 physical format (only with innodb_encrypt_log=ON)
@@ -61,6 +65,10 @@ pub const SIZE_OF_FILE_CHECKPOINT: u64 = 3/*type,page_id*/ + 8/*LSN*/ + 1 + 4;
 
 pub struct Redo {
     mmap: Mmap,
+    // The header of the redo log file.
+    hdr: RedoHeader,
+    // Checkpoint coordinates, if any.
+    checkpoint: RedoCheckpointCoordinate,
 }
 
 // Offsets of a log file header.
@@ -81,12 +89,28 @@ pub const LOG_HEADER_CREATOR_END: usize = 48;
 // CRC-32C checksum of the log file header.
 pub const LOG_HEADER_CRC: usize = 508;
 
+// Redo log encryption key ID.
+pub const LOG_DEFAULT_ENCRYPTION_KEY: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedoHeader {
     pub version: u32,
     pub first_lsn: Lsn,
     pub creator: String,
     pub crc: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedoCheckpointCoordinate {
+    pub checkpoint_lsn: Option<Lsn>,
+    // Position of the checkpoint block entry in the log file.
+    // can be CHECKPOINT_1 or CHECKPOINT_2.
+    pub checkpoint_no: Option<usize>,
+    pub end_lsn: Lsn,
+    pub encrypted: bool,
+    pub version: u32,
+    // Redo log is after a restore operation.
+    pub start_after_restore: bool,
 }
 
 impl Redo {
@@ -115,7 +139,9 @@ impl Redo {
                 .context("mmap log file")?
         };
 
-        if Self::check_multiple_log_files(config, log_size).context("check_multiple_log_files")? {
+        let multiple_log_files = Self::search_multiple_log_files(config, log_size)
+            .context("check multiple log files")?;
+        if multiple_log_files > 0 {
             // Multiple ones are possible if we are upgrading from before MariaDB Server 10.5.1.
             // We do not support that.
             return Err(anyhow::anyhow!(
@@ -123,15 +149,31 @@ impl Redo {
             ));
         }
 
-        Ok(Redo { mmap })
+        let hdr = Redo::parse_header(mmap.as_slice()).context("parse header")?;
+        let checkpoint = Redo::parse_header_checkpoint(mmap.as_slice(), &hdr, multiple_log_files)
+            .context("parse redo log checkpoint")?;
+
+        Ok(Redo {
+            mmap,
+            hdr,
+            checkpoint,
+        })
     }
 
     pub fn buf(&self) -> &[u8] {
         self.mmap.as_slice()
     }
 
-    fn check_multiple_log_files(config: &Config, size: u64) -> anyhow::Result<bool> {
-        let mut found = false;
+    pub fn header(&self) -> &RedoHeader {
+        &self.hdr
+    }
+
+    pub fn checkpoint(&self) -> &RedoCheckpointCoordinate {
+        &self.checkpoint
+    }
+
+    fn search_multiple_log_files(config: &Config, size: u64) -> anyhow::Result<usize> {
+        let mut found = 0;
 
         for i in 1..101 {
             let log_file_x_path = config.get_log_file_x_path(i);
@@ -139,7 +181,7 @@ impl Redo {
                 break;
             }
 
-            found = true;
+            found += 1;
 
             let file = std::fs::File::open(&log_file_x_path)
                 .with_context(|| format!("open log file at {}", log_file_x_path.display()))?;
@@ -157,9 +199,7 @@ impl Redo {
         Ok(found)
     }
 
-    pub fn parse_header(&self) -> anyhow::Result<RedoHeader> {
-        let buf = self.buf();
-
+    pub fn parse_header(buf: &[u8]) -> anyhow::Result<RedoHeader> {
         if buf.len() < 512 {
             return Err(anyhow::anyhow!(
                 "log file is too small to contain a header (< 512)"
@@ -173,10 +213,9 @@ impl Redo {
             .to_string();
         let crc = mach::mach_read_from_4(&buf[LOG_HEADER_CRC..]);
 
-        // TODO: verify the version is latest or at least that one that use crc32c checksum.
-
-        {
-            let (ok, hdr_crc) = RedoHeader::verify_checksum(buf, crc);
+        // The original InnoDB redo log format does not have a checksum.
+        if version != FORMAT_3_23 {
+            let (ok, hdr_crc) = RedoHeader::verify_checksum(&buf[..512], crc);
             if !ok {
                 bail!("log file header checksum mismatch: expected {crc}, got {hdr_crc}");
             }
@@ -189,15 +228,177 @@ impl Redo {
             crc,
         })
     }
+
+    pub fn parse_header_checkpoint(
+        buf: &[u8],
+        hdr: &RedoHeader,
+        multiple_log_files: usize,
+    ) -> anyhow::Result<RedoCheckpointCoordinate> {
+        let mut checkpoint = RedoCheckpointCoordinate {
+            checkpoint_lsn: None,
+            checkpoint_no: None,
+            end_lsn: hdr.first_lsn,
+            encrypted: false,
+            version: hdr.version,
+            start_after_restore: false,
+        };
+
+        match checkpoint.version {
+            FORMAT_10_8 => {
+                if multiple_log_files > 0 {
+                    bail!("InnoDB: Expecting only ib_logfile0, but multiple log files found");
+                }
+
+                let second_hdr_u32 = mach::mach_read_from_4(&buf[LOG_HEADER_FORMAT + 4..]);
+                if second_hdr_u32 != 0 || hdr.first_lsn < FIRST_LSN {
+                    bail!(
+                        "InnoDB: Invalid ib_logfile0 header block; the log was created with {}",
+                        hdr.creator
+                    );
+                }
+
+                let whatever_it_is = mach::mach_read_from_4(&buf[LOG_HEADER_CREATOR_END..]);
+                if whatever_it_is == 0 {
+                    // all good
+                } else if !Redo::parse_crypt_header(&buf[LOG_HEADER_CREATOR_END..])? {
+                    bail!(
+                        "InnoDB: Reading log encryption info failed; the log was created with {}",
+                        hdr.creator
+                    );
+                } else {
+                    checkpoint.version = FORMAT_ENC_10_8;
+                    checkpoint.encrypted = true;
+                }
+
+                let step = CHECKPOINT_2 - CHECKPOINT_1;
+                for pos in (CHECKPOINT_1..=CHECKPOINT_2).step_by(step) {
+                    // Checkpoint block is 60 bytes long + 4 bytes for the checksum.
+                    // - 8 byte: checkpoint_lsn
+                    // - 8 byte: end_lsn
+                    // - 44 byte: reserved
+                    // - 4 byte: checksum
+                    let checkpoint_lsn: Lsn = mach::mach_read_from_8(&buf[pos..]);
+                    let end_lsn: Lsn = mach::mach_read_from_8(&buf[pos + 8..]);
+                    let reserved = &buf[pos + 16..pos + 60];
+                    let checksum = mach::mach_read_from_4(&buf[pos + 60..]);
+
+                    if checkpoint_lsn < hdr.first_lsn
+                        || end_lsn < checkpoint_lsn
+                        || reserved != [0; 44]
+                        || checksum != crc32c(&buf[pos..pos + 60])
+                    {
+                        writeln!(
+                            std::io::stderr(),
+                            "InnoDB: Invalid checkpoint at {pos}: checkpoint_lsn={checkpoint_lsn}, end_lsn={end_lsn}, reserved={reserved:?}, checksum={checksum}"
+                        )?;
+                    }
+
+                    if checkpoint_lsn >= checkpoint.checkpoint_lsn.unwrap_or(0) {
+                        checkpoint.checkpoint_lsn = Some(checkpoint_lsn);
+                        checkpoint.checkpoint_no = Some(pos);
+                        checkpoint.end_lsn = end_lsn;
+                    }
+                }
+
+                if hdr.creator.starts_with("Backup ") {
+                    checkpoint.start_after_restore = true;
+                }
+            }
+            FORMAT_10_2 | FORMAT_ENC_10_2 | FORMAT_10_3 | FORMAT_ENC_10_3 | FORMAT_10_4
+            | FORMAT_ENC_10_4 | FORMAT_10_5 | FORMAT_ENC_10_5 => {
+                if (checkpoint.version == FORMAT_10_5 || checkpoint.version == FORMAT_ENC_10_5)
+                    && multiple_log_files > 0
+                {
+                    bail!("InnoDB: Expecting only ib_logfile0, but multiple log files found");
+                }
+
+                let log_size = ((buf.len() - 2048) * multiple_log_files) as Lsn;
+                for pos in (512_usize..2048).step_by(1024) {
+                    let crc = mach::mach_read_from_4(&buf[pos + LOG_HEADER_CRC..]);
+                    let (ok, hdr_crc) = RedoHeader::verify_checksum(&buf[pos..pos + 512], crc);
+                    if !ok {
+                        writeln!(
+                            std::io::stderr(),
+                            "InnoDB: Invalid checkpoint checksum at {pos}: expected {crc}, got {hdr_crc}"
+                        )?;
+                        continue;
+                    }
+
+                    // TODO: if (log_sys.is_encrypted() && !log_crypt_read_checkpoint_buf(b))
+                    if checkpoint.version & FORMAT_ENCRYPTED != 0 {
+                        checkpoint.encrypted = true;
+                        todo!("Handle encrypted log header parsing");
+                        //  sql_print_error("InnoDB: Reading checkpoint encryption info failed./       continue;
+                    }
+
+                    let checkpoint_no = mach::mach_read_from_8(&buf[pos..]) as usize;
+                    let checkpoint_lsn: Lsn = mach::mach_read_from_8(&buf[pos + 8..]);
+                    let end_lsn: Lsn = mach::mach_read_from_8(&buf[pos + 16..]);
+
+                    writeln!(
+                        std::io::stderr(),
+                        "InnoDB: checkpoint {checkpoint_no} at LSN {checkpoint_lsn} found",
+                    )?;
+
+                    if checkpoint_no >= checkpoint.checkpoint_no.unwrap_or(0)
+                        && end_lsn >= 0x80c
+                        && (end_lsn & !511) + 512 < log_size
+                    {
+                        checkpoint.checkpoint_lsn = Some(checkpoint_lsn);
+                        checkpoint.checkpoint_no = Some(checkpoint_no);
+                        checkpoint.end_lsn = end_lsn; // log_offset
+                    }
+                }
+
+                if checkpoint.checkpoint_lsn.is_none() {
+                    bail!(
+                        "InnoDB: No valid checkpoint was found; the log was created with {}",
+                        hdr.creator
+                    );
+                }
+
+                // TODO: if (dberr_t err= recv_log_recover_10_5(lsn_offset)) {}
+                todo!("Handle log recovery for <=10.5 formats");
+                // TODO: upgrade
+            }
+            _ => {
+                bail!(
+                    "InnoDB: Unsupported redo log format version: {}",
+                    hdr.version
+                );
+            }
+        }
+
+        if checkpoint.checkpoint_lsn.is_none() {
+            bail!(
+                "InnoDB: No valid checkpoint was found; the log was created with {}",
+                hdr.creator
+            );
+        }
+
+        Ok(checkpoint)
+    }
+
+    // Read the encryption information from a log header buffer.
+    // See log_crypt_read_header().
+    pub fn parse_crypt_header(hdr: &[u8]) -> anyhow::Result<bool> {
+        let encryption_key = mach::mach_read_from_4(hdr);
+        if encryption_key != LOG_DEFAULT_ENCRYPTION_KEY {
+            // No encryption.
+            return Ok(false);
+        }
+
+        todo!("Handle log encryption header parsing");
+    }
 }
 
 impl RedoHeader {
-    pub fn verify_checksum(buf: &[u8], crc: u32) -> (bool, u32) {
-        if buf.len() < LOG_HEADER_CRC {
+    pub fn verify_checksum(block512: &[u8], crc: u32) -> (bool, u32) {
+        if block512.len() < LOG_HEADER_CRC {
             return (false, 0);
         }
 
-        let new = crc32c(&buf[0..LOG_HEADER_CRC]);
+        let new = crc32c(&block512[0..LOG_HEADER_CRC]);
 
         (new == crc, new)
     }
