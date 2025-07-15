@@ -215,7 +215,7 @@ impl Redo {
 
         // The original InnoDB redo log format does not have a checksum.
         if version != FORMAT_3_23 {
-            let (ok, hdr_crc) = RedoHeader::verify_checksum(&buf[..512], crc);
+            let (ok, hdr_crc) = verify_checksum(&buf[..512], crc);
             if !ok {
                 bail!("log file header checksum mismatch: expected {crc}, got {hdr_crc}");
             }
@@ -315,7 +315,7 @@ impl Redo {
                 let log_size = ((buf.len() - 2048) * multiple_log_files) as Lsn;
                 for pos in (512_usize..2048).step_by(1024) {
                     let crc = mach::mach_read_from_4(&buf[pos + LOG_HEADER_CRC..]);
-                    let (ok, hdr_crc) = RedoHeader::verify_checksum(&buf[pos..pos + 512], crc);
+                    let (ok, hdr_crc) = verify_checksum(&buf[pos..pos + 512], crc);
                     if !ok {
                         writeln!(
                             std::io::stderr(),
@@ -393,13 +393,21 @@ impl Redo {
 }
 
 impl RedoHeader {
-    pub fn verify_checksum(block512: &[u8], crc: u32) -> (bool, u32) {
-        if block512.len() < LOG_HEADER_CRC {
-            return (false, 0);
-        }
-
-        let new = crc32c(&block512[0..LOG_HEADER_CRC]);
-
-        (new == crc, new)
+    pub fn is_latest(version: u32) -> bool {
+        is_latest(version)
     }
+}
+
+pub fn is_latest(version: u32) -> bool {
+    version & (!FORMAT_ENCRYPTED) == FORMAT_10_8
+}
+
+pub fn verify_checksum(block512: &[u8], crc: u32) -> (bool, u32) {
+    if block512.len() < LOG_HEADER_CRC {
+        return (false, 0);
+    }
+
+    let new = crc32c(&block512[0..LOG_HEADER_CRC]);
+
+    (new == crc, new)
 }
