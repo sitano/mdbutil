@@ -15,7 +15,10 @@ impl<'a> RingReader<'a> {
     }
 
     pub fn buf_at(buf: &'a [u8], pos: usize) -> RingReader<'a> {
-        RingReader { buf, pos }
+        RingReader {
+            buf,
+            pos: pos % buf.len(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -26,10 +29,21 @@ impl<'a> RingReader<'a> {
         self.len() == 0
     }
 
-    pub fn mach_read_from_4(&mut self) -> Result<u32> {
-        if self.len() < 4 {
+    pub fn ensure(&self, t: usize) -> Result<()> {
+        if self.len() < t {
             return Err(Error::from(ErrorKind::UnexpectedEof));
         }
+
+        Ok(())
+    }
+
+    pub fn peek_1(&self) -> Result<u8> {
+        self.ensure(1)?;
+        Ok(self.buf[self.pos])
+    }
+
+    pub fn read_4(&mut self) -> Result<u32> {
+        self.ensure(4)?;
 
         let mut buf = [0u8; 4];
         self.read_exact(&mut buf)?;
@@ -37,10 +51,8 @@ impl<'a> RingReader<'a> {
         Ok(mach::mach_read_from_4(&buf))
     }
 
-    pub fn mach_read_from_8(&mut self) -> Result<u64> {
-        if self.len() < 8 {
-            return Err(Error::from(ErrorKind::UnexpectedEof));
-        }
+    pub fn read_8(&mut self) -> Result<u64> {
+        self.ensure(8)?;
 
         let mut buf = [0u8; 8];
         self.read_exact(&mut buf)?;
