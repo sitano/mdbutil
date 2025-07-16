@@ -10,6 +10,7 @@ pub struct RingReader<'a> {
 }
 
 impl<'a> RingReader<'a> {
+    // TODO: base offset (header)
     pub fn new(buf: &'a [u8]) -> RingReader<'a> {
         Self::buf_at(buf, 0)
     }
@@ -37,9 +38,22 @@ impl<'a> RingReader<'a> {
         Ok(())
     }
 
+    pub fn advance(&mut self, bytes: usize) {
+        self.pos = (self.pos + bytes) % self.buf.len();
+    }
+
     pub fn peek_1(&self) -> Result<u8> {
         self.ensure(1)?;
         Ok(self.buf[self.pos])
+    }
+
+    pub fn read_1(&mut self) -> Result<u8> {
+        self.ensure(1)?;
+
+        let mut buf = [0u8; 1];
+        self.read_exact(&mut buf)?;
+
+        Ok(buf[0])
     }
 
     pub fn read_4(&mut self) -> Result<u32> {
