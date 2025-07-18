@@ -43,20 +43,30 @@ $ cargo run -- --log-group-path data
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
-    creator: "MariaDB 11.8.2",
-    crc: 103712569,
+    creator: "MariaDB 11.6.2",
+    crc: 224651864,
 }
-
 RedoCheckpointCoordinate {
     checkpoint_lsn: Some(
-        95487,
+        56893,
     ),
     checkpoint_no: Some(
-        4096,
+        8192,
     ),
-    end_lsn: 95487,
+    end_lsn: 56893,
     encrypted: false,
     version: 1349024115,
     start_after_restore: false,
 }
-```
+Mtr {
+    len: 10,
+    checksum: 530797207,
+}
+Err(
+    Error {
+        context: "Mtr::parse_next",
+        source: Kind(
+            NotFound,
+        ),
+    },
+)```

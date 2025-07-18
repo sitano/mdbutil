@@ -1,6 +1,8 @@
 use std::cmp::min;
 use std::io::{Error, ErrorKind, Read, Result};
 
+use crc32c::crc32c;
+
 use crate::mach;
 
 #[derive(Debug, Clone)]
@@ -20,6 +22,15 @@ impl<'a> RingReader<'a> {
             buf,
             pos: pos % buf.len(),
         }
+    }
+
+    pub fn block(&self, size: usize) -> &[u8] {
+        // TODO: wrap
+        &self.buf[self.pos..self.pos + size]
+    }
+
+    pub fn crc32c(&self, size: usize) -> u32 {
+        crc32c(self.block(size))
     }
 
     pub fn len(&self) -> usize {

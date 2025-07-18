@@ -10,10 +10,13 @@ pub const MTR_END_MARKER: u8 = 1u8;
 /// Maximum guaranteed size of a mini-transaction.
 pub const MTR_SIZE_MAX: u32 = 1u32 << 20;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Mtr {
     /// total mtr length including 1st byte.
     len: u32,
+    /// checksum
+    checksum: u32,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -21,10 +24,33 @@ impl Mtr {
     pub fn parse_next(r: &mut RingReader) -> Result<Self> {
         peek_not_end_marker(r)?;
 
-        let _mtr_start = r.clone();
+        let mtr_start = r.clone();
         let len = Self::parse_len_byte(r)?;
 
-        Ok(Mtr { len })
+        // TODO: if (*l != log_sys.get_sequence_bit((l - begin) + lsn))
+        //   return GOT_EOF;
+
+        // body length = 1st byte + payload length.
+        //         and 1 byte termination marker,
+        //         and 4 crc32c checksum.
+        let real_crc = mtr_start.crc32c((len + 1) as usize);
+        r.advance(1); // past termination marker.
+
+        // TODO: encyption, crc iv 8
+
+        let expected_crc = r.read_4()?; // read block crc.
+
+        if real_crc != expected_crc {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("mtr checksum is invalid, expected {expected_crc:#x}, real {real_crc:#x}"),
+            ));
+        }
+
+        Ok(Mtr {
+            len,
+            checksum: real_crc,
+        })
     }
 
     pub fn parse_len_byte(r: &mut RingReader) -> Result<u32> {
@@ -85,6 +111,7 @@ mod test {
             0xfa, // FILE_CHECKPOINT + len 10 bytes (+1 1st byte + 1 termination marker)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xde, 0x3d, //  whatever it is
             0x01, // marker
+            0x1f, 0xa3, 0x52, 0x97, // checksum
         ];
         let buf = &storage;
         let mut r0 = RingReader::new(buf);

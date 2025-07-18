@@ -65,6 +65,7 @@ pub const SIZE_OF_FILE_CHECKPOINT: u64 = 3/*type,page_id*/ + 8/*LSN*/ + 1 + 4;
 
 pub struct Redo {
     mmap: Mmap,
+    size: u64,
     // The header of the redo log file.
     hdr: RedoHeader,
     // Checkpoint coordinates, if any.
@@ -159,6 +160,7 @@ impl Redo {
 
         Ok(Redo {
             mmap,
+            size: log_size,
             hdr,
             checkpoint,
         })
@@ -219,7 +221,7 @@ impl Redo {
 
         // The original InnoDB redo log format does not have a checksum.
         if version != FORMAT_3_23 {
-            let (ok, hdr_crc) = verify_checksum(&buf[..512], crc);
+            let (ok, hdr_crc) = verify_crc_block(&buf[..512], crc);
             if !ok {
                 bail!("log file header checksum mismatch: expected {crc}, got {hdr_crc}");
             }
@@ -319,7 +321,7 @@ impl Redo {
                 let log_size = ((buf.len() - 2048) * multiple_log_files) as Lsn;
                 for pos in (512_usize..2048).step_by(1024) {
                     let crc = mach::mach_read_from_4(&buf[pos + LOG_HEADER_CRC..]);
-                    let (ok, hdr_crc) = verify_checksum(&buf[pos..pos + 512], crc);
+                    let (ok, hdr_crc) = verify_crc_block(&buf[pos..pos + 512], crc);
                     if !ok {
                         writeln!(
                             std::io::stderr(),
@@ -406,24 +408,38 @@ impl Redo {
             reader: RingReader::buf_at(self.mmap.as_slice(), lsn as usize),
         }
     }
-}
 
-impl RedoHeader {
-    pub fn is_latest(version: u32) -> bool {
-        is_latest(version)
+    /// returns whether the redo log is in the latest format.
+    pub fn is_latest(&self) -> bool {
+        is_latest(self.hdr.version)
+    }
+
+    /// returns redo log capacity in bytes.
+    pub fn capacity(&self) -> Lsn {
+        self.size - self.hdr.first_lsn
+    }
+
+    /// Determine the sequence bit at a log sequence number.
+    pub fn get_sequence_bit(&self, lsn: Lsn) -> u8 {
+        if ((lsn - self.hdr.first_lsn) / self.capacity()) & 1 == 0 {
+            0
+        } else {
+            1
+        }
     }
 }
 
-pub fn is_latest(version: u32) -> bool {
+fn is_latest(version: u32) -> bool {
     version & (!FORMAT_ENCRYPTED) == FORMAT_10_8
 }
 
-pub fn verify_checksum(block512: &[u8], crc: u32) -> (bool, u32) {
-    if block512.len() < LOG_HEADER_CRC {
+/// verifies block checksum where last 4 bytes is crc32.
+fn verify_crc_block(block: &[u8], crc: u32) -> (bool, u32) {
+    if block.len() < 4 {
         return (false, 0);
     }
 
-    let new = crc32c(&block512[0..LOG_HEADER_CRC]);
+    let new = crc32c(&block[0..block.len() - 4]);
 
     (new == crc, new)
 }
