@@ -5,7 +5,7 @@ use anyhow::bail;
 use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
-use crate::{config::Config, mach};
+use crate::{config::Config, mach, mtr::Mtr, ring::RingReader};
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.
 pub type Lsn = u64;
@@ -69,6 +69,10 @@ pub struct Redo {
     hdr: RedoHeader,
     // Checkpoint coordinates, if any.
     checkpoint: RedoCheckpointCoordinate,
+}
+
+pub struct RedoReader<'a> {
+    reader: RingReader<'a>,
 }
 
 // Offsets of a log file header.
@@ -390,6 +394,18 @@ impl Redo {
 
         todo!("Handle log encryption header parsing");
     }
+
+    pub fn reader(&self) -> RedoReader {
+        let lsn = if let Some(lsn) = self.checkpoint.checkpoint_lsn {
+            lsn
+        } else {
+            self.hdr.first_lsn
+        };
+
+        RedoReader {
+            reader: RingReader::buf_at(self.mmap.as_slice(), lsn as usize),
+        }
+    }
 }
 
 impl RedoHeader {
@@ -410,4 +426,10 @@ pub fn verify_checksum(block512: &[u8], crc: u32) -> (bool, u32) {
     let new = crc32c(&block512[0..LOG_HEADER_CRC]);
 
     (new == crc, new)
+}
+
+impl<'a> RedoReader<'a> {
+    pub fn parse_next(&mut self) -> anyhow::Result<Mtr> {
+        Mtr::parse_next(&mut self.reader).context("Mtr::parse_next")
+    }
 }

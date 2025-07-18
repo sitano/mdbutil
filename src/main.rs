@@ -9,4 +9,10 @@ fn main() {
 
     println!("{:#?}", log.header());
     println!("{:#?}", log.checkpoint());
+
+    let mut reader = log.reader();
+    println!("{:#?}", reader.parse_next().expect("reader.parse_next"));
+
+    // good redo log will have no mtrs after file_checkpoint.
+    println!("{:#?}", reader.parse_next());
 }
