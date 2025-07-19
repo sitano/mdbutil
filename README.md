@@ -40,6 +40,8 @@ or with graceful shutdown:
 
 $ cargo run -- --log-group-path data
 
+Header block: 12288
+Size: 100663296, Capacity: 0x5ffd000
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
@@ -58,15 +60,12 @@ RedoCheckpointCoordinate {
     version: 1349024115,
     start_after_restore: false,
 }
+FILE_CHECKPOINT LSN: 14564609
 Mtr {
     len: 10,
+    space_id: 0,
+    page_no: 0,
+    op: 240, // FILE_CHECKPOINT (0xf0)
     checksum: 530797207,
 }
-Err(
-    Error {
-        context: "Mtr::parse_next",
-        source: Kind(
-            NotFound,
-        ),
-    },
-)```
+```

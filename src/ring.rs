@@ -33,6 +33,10 @@ impl<'a> RingReader<'a> {
         crc32c(self.block(size))
     }
 
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
     pub fn len(&self) -> usize {
         self.buf.len()
     }

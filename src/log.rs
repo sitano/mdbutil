@@ -170,6 +170,10 @@ impl Redo {
         self.mmap.as_slice()
     }
 
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
     pub fn header(&self) -> &RedoHeader {
         &self.hdr
     }
@@ -397,7 +401,7 @@ impl Redo {
         todo!("Handle log encryption header parsing");
     }
 
-    pub fn reader(&self) -> RedoReader {
+    pub fn reader(&self) -> RedoReader<'_> {
         let lsn = if let Some(lsn) = self.checkpoint.checkpoint_lsn {
             lsn
         } else {
