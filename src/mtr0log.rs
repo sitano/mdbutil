@@ -1,5 +1,6 @@
-use byteorder::ReadBytesExt;
-use std::io::{Error, ErrorKind, Read, Result};
+use std::io::{Error, ErrorKind, Read, Result, Write};
+
+use byteorder::{ReadBytesExt, WriteBytesExt};
 
 /// The minimum 2-byte integer (0b10xxxxxx xxxxxxxx)
 pub const MIN_2BYTE: u32 = 1 << 7;
@@ -9,6 +10,9 @@ pub const MIN_3BYTE: u32 = MIN_2BYTE + (1 << 14);
 pub const MIN_4BYTE: u32 = MIN_3BYTE + (1 << 21);
 /// Minimum 5-byte integer (0b11110000 xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx)
 pub const MIN_5BYTE: u32 = MIN_4BYTE + (1 << 28);
+
+/// Error from mlog_decode_varint()
+pub const MLOG_DECODE_ERROR: u32 = !0u32;
 
 /// Decode the length of a variable-length encoded integer.
 /// @param first  first byte of the encoded integer
@@ -77,4 +81,57 @@ pub fn mlog_decode_varint(mut buf: impl Read) -> Result<u32> {
         ErrorKind::InvalidData,
         "can't decode mlog varint",
     ))
+}
+
+/// Encode an integer in a redo log record.
+/// @param log  redo log record buffer
+/// @param i    the integer to encode
+/// @return end of the encoded integer
+pub fn mlog_encode_varint(mut w: impl Write, mut i: u32) -> Result<()> {
+    if i < MIN_2BYTE {
+        // nothing
+    } else if i < MIN_3BYTE {
+        i -= MIN_2BYTE;
+        // static_assert(MIN_3BYTE - MIN_2BYTE == 1 << 14, "compatibility");
+        w.write_u8(0x80 | (i >> 8) as u8)?;
+    } else if i < MIN_4BYTE {
+        i -= MIN_3BYTE;
+        // static_assert(MIN_4BYTE - MIN_3BYTE == 1 << 21, "compatibility");
+        w.write_u8(0xc0 | (i >> 16) as u8)?;
+        w.write_u8((i >> 8) as u8)?;
+    } else if i < MIN_5BYTE {
+        i -= MIN_4BYTE;
+        // static_assert(MIN_5BYTE - MIN_4BYTE == 1 << 28, "compatibility");
+        w.write_u8(0xe0 | (i >> 24) as u8)?;
+        w.write_u8((i >> 16) as u8)?;
+        w.write_u8((i >> 8) as u8)?;
+    } else {
+        assert!(i < MLOG_DECODE_ERROR);
+        i -= MIN_5BYTE;
+        w.write_u8(0xf0)?;
+        w.write_u8((i >> 24) as u8)?;
+        w.write_u8((i >> 16) as u8)?;
+        w.write_u8((i >> 8) as u8)?;
+    }
+
+    w.write_u8(i as u8)
+}
+
+#[cfg(test)]
+mod test {
+    use super::{mlog_decode_varint, mlog_encode_varint};
+
+    #[test]
+    fn test_varint() {
+        let nums: [u32; 4] = [0x01, 0x1234, 0x123456, 0x12345678];
+        for num in nums {
+            let mut buf = Vec::<u8>::new();
+            mlog_encode_varint(&mut buf, num).unwrap();
+            assert_eq!(
+                mlog_decode_varint(buf.as_slice()).unwrap(),
+                num,
+                "buf: {buf:#x?}"
+            );
+        }
+    }
 }
