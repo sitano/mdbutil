@@ -5,12 +5,8 @@ use anyhow::bail;
 use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
+use crate::Lsn;
 use crate::{config::Config, mach, mtr::Mtr, ring::RingReader};
-
-// Type (lsn_t) used for all log sequence number storage and arithmetics.
-pub type Lsn = u64;
-
-pub const LSN_MAX: Lsn = u64::MAX;
 
 // According to Linux "man 2 read" and "man 2 write" this applies to
 // both 32-bit and 64-bit systems.

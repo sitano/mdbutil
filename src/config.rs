@@ -12,6 +12,9 @@ pub struct Config {
         help = "Path to the data directory with the log group (Redo Log)"
     )]
     pub srv_log_group_home_dir: PathBuf,
+
+    #[clap(default_value = "false", long)]
+    pub write: bool,
 }
 
 impl Config {

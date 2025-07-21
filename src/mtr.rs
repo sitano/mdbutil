@@ -1,5 +1,7 @@
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind, Result, Write};
 
+use crate::Lsn;
+use crate::mach::{mach_write_to_4, mach_write_to_8};
 use crate::mtr0log::{mlog_decode_varint, mlog_decode_varint_length};
 use crate::mtr0types::mfile_type_t::FILE_CHECKPOINT;
 use crate::ring::RingReader;
@@ -18,13 +20,21 @@ pub const TRX_SYS_SPACE: u32 = 0;
 #[derive(Debug)]
 pub struct Mtr {
     /// total mtr length including 1st byte
-    len: u32,
+    pub len: u32,
+
     /// tablespace id
-    space_id: u32,
-    page_no: u32,
-    op: u8,
+    pub space_id: u32,
+    pub page_no: u32,
+
+    pub op: u8,
+
     /// checksum
-    checksum: u32,
+    pub checksum: u32,
+
+    // payload
+    //
+    // FILE_CHECKPOINT LSN, if any.
+    pub file_checkpoint_lsn: Option<Lsn>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -39,8 +49,8 @@ impl Mtr {
         //   return GOT_EOF;
 
         // body length = 1st byte + payload length.
-        //         and 1 byte termination marker,
-        //         and 4 crc32c checksum.
+        // mtr also has 1 byte termination marker,
+        //          and 4 crc32c checksum.
         let real_crc = mtr_start.crc32c((len + 1) as usize);
         r.advance(1); // past termination marker.
 
@@ -69,7 +79,7 @@ impl Mtr {
 
         // move past varint length.
         let mut rlen = (b & 0xf) as u32;
-        if rlen > 0 {
+        if rlen == 0 {
             let lenlen = mlog_decode_varint_length(l.peek_1()?);
             // TODO: let addlen = mlog_decode_varint(l.block(lenlen))?;
             // TODO: rlen = addlen + 15 - lenlen as u32;
@@ -89,6 +99,7 @@ impl Mtr {
         rlen -= page_no_len as u32;
 
         let mut mtr_op = 0;
+        let mut file_checkpoint_lsn = None;
         let got_page_op = b & 0x80 == 0;
 
         if got_page_op {
@@ -99,8 +110,8 @@ impl Mtr {
             mtr_op = b & 0xf0;
 
             if mtr_op == FILE_CHECKPOINT as u8 {
-                let lsn = l.read_8()?;
-                println!("FILE_CHECKPOINT LSN: {lsn}");
+                let lsn = l.read_8()? as Lsn;
+                file_checkpoint_lsn = Some(lsn);
             }
         } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
             // nothing
@@ -116,6 +127,7 @@ impl Mtr {
             page_no,
             op: mtr_op,
             checksum: real_crc,
+            file_checkpoint_lsn,
         })
     }
 
@@ -153,6 +165,25 @@ impl Mtr {
     pub fn len(&self) -> u32 {
         self.len
     }
+
+    pub fn build_file_checkpoint(mut buf: impl Write, lsn: Lsn) -> Result<()> {
+        // 0xfa is FILE_CHECKPOINT + 10b + 1b termination marker + 4b checksum)
+        let mut temp = [0u8; 1 + 10 + 1 + 4];
+        let mut cursor = std::io::Cursor::new(temp.as_mut_slice());
+
+        cursor.write_all(&[0xfa])?; // FILE_CHECKPOINT + body len 10 bytes
+        cursor.write_all(&[0x00, 0x00])?; // tablespace id + page no
+        mach_write_to_8(&mut cursor, lsn)?; // checkpoint LSN
+
+        cursor.write_all(&[MTR_END_MARKER])?; // termination marker
+
+        let checksum = crc32c::crc32c(&cursor.get_ref()[..1 + 10]);
+        mach_write_to_4(&mut cursor, checksum)?;
+
+        buf.write_all(cursor.get_ref())?;
+
+        Ok(())
+    }
 }
 
 /// test for EOF. tests if reader points at termination byte marker.
@@ -169,13 +200,16 @@ pub fn peek_not_end_marker(r: &mut RingReader) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::Mtr;
+
+    use crate::mtr0types::mfile_type_t::FILE_CHECKPOINT;
     use crate::ring::RingReader;
 
     #[test]
     fn test_mtr_short_len() {
         let storage = [
             0xfa, // FILE_CHECKPOINT + len 10 bytes (+1 1st byte + 1 termination marker)
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xde, 0x3d, //  whatever it is
+            0x00, 0x00, // tablespace id + page no
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xde, 0x3d, // checkpoint LSN
             0x01, // marker
             0x1f, 0xa3, 0x52, 0x97, // checksum
         ];
@@ -183,5 +217,21 @@ mod test {
         let mut r0 = RingReader::new(buf);
         let mtr = Mtr::parse_next(&mut r0).unwrap();
         assert_eq!(mtr.len, 10, "len");
+    }
+
+    #[test]
+    fn test_build_file_checkpoint() {
+        let mut buf = Vec::new();
+        let lsn = 0x000000000000de3d;
+        Mtr::build_file_checkpoint(&mut buf, lsn).unwrap();
+
+        let mut r0 = RingReader::new(buf.as_slice());
+        let mtr = Mtr::parse_next(&mut r0).unwrap();
+
+        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.space_id, 0, "space_id");
+        assert_eq!(mtr.page_no, 0, "page_no");
+        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
     }
 }
