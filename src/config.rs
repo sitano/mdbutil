@@ -22,8 +22,7 @@ impl Config {
         self.srv_log_group_home_dir.join(LOG_FILE_NAME)
     }
 
-    pub fn get_log_file_x_path(&self, i: usize) -> PathBuf {
-        self.srv_log_group_home_dir
-            .join(format!("{LOG_FILE_NAME_PREFIX}{i}"))
+    pub fn get_log_file_x(i: usize) -> String {
+        format!("{LOG_FILE_NAME_PREFIX}{i}")
     }
 }

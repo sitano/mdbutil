@@ -175,6 +175,7 @@ impl Mtr {
         cursor.write_all(&[0x00, 0x00])?; // tablespace id + page no
         mach_write_to_8(&mut cursor, lsn)?; // checkpoint LSN
 
+        // TODO: wrap bit
         cursor.write_all(&[MTR_END_MARKER])?; // termination marker
 
         let checksum = crc32c::crc32c(&cursor.get_ref()[..1 + 10]);

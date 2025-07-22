@@ -5,6 +5,9 @@ use crc32c::crc32c;
 
 use crate::mach;
 
+// TODO: move to u64?
+// TODO: support Write
+
 #[derive(Debug, Clone)]
 pub struct RingReader<'a> {
     buf: &'a [u8],

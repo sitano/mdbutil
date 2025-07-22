@@ -1,8 +1,9 @@
 use std::cmp::min;
 use std::io::Write;
+use std::path::PathBuf;
 
-use anyhow::Context;
 use anyhow::bail;
+use anyhow::Context;
 use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
@@ -104,6 +105,7 @@ pub struct RedoHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedoCheckpointCoordinate {
+    pub checkpoints: [RedoHeaderCheckpoint; 2],
     pub checkpoint_lsn: Option<Lsn>,
     // Position of the checkpoint block entry in the log file.
     // can be CHECKPOINT_1 or CHECKPOINT_2.
@@ -115,10 +117,16 @@ pub struct RedoCheckpointCoordinate {
     pub start_after_restore: bool,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct RedoHeaderCheckpoint {
+    pub checkpoint_lsn: Lsn,
+    pub end_lsn: Lsn,
+    pub checksum: u32,
+}
+
 impl Redo {
-    pub fn open(config: &Config) -> anyhow::Result<Redo> {
-        let log_file_path = config.get_log_file_path();
-        let log_file = std::fs::File::open(&log_file_path)
+    pub fn open(log_file_path: &PathBuf) -> anyhow::Result<Redo> {
+        let log_file = std::fs::File::open(log_file_path)
             .with_context(|| format!("open log file at {}", log_file_path.display()))?;
         let log_meta = log_file.metadata().context("get metadata for log a file")?;
         let log_size = log_meta.len();
@@ -132,6 +140,7 @@ impl Redo {
             ));
         }
 
+        // TODO: support Write
         let mmap = unsafe {
             MmapOptions::new(log_size as usize)
                 .context("mmap option")?
@@ -141,8 +150,14 @@ impl Redo {
                 .context("mmap log file")?
         };
 
-        let multiple_log_files = Self::search_multiple_log_files(config, log_size)
-            .context("check multiple log files")?;
+        let multiple_log_files = Self::search_multiple_log_files(
+            log_file_path
+                .parent()
+                .context("log file parent must exist")?
+                .to_path_buf(),
+            log_size,
+        )
+        .context("check multiple log files")?;
         if multiple_log_files > 0 {
             // Multiple ones are possible if we are upgrading from before MariaDB Server 10.5.1.
             // We do not support that.
@@ -179,11 +194,11 @@ impl Redo {
         &self.checkpoint
     }
 
-    fn search_multiple_log_files(config: &Config, size: u64) -> anyhow::Result<usize> {
+    fn search_multiple_log_files(dir: PathBuf, size: u64) -> anyhow::Result<usize> {
         let mut found = 0;
 
         for i in 1..101 {
-            let log_file_x_path = config.get_log_file_x_path(i);
+            let log_file_x_path = dir.join(Config::get_log_file_x(i));
             if !log_file_x_path.exists() {
                 break;
             }
@@ -242,6 +257,10 @@ impl Redo {
         multiple_log_files: usize,
     ) -> anyhow::Result<RedoCheckpointCoordinate> {
         let mut checkpoint = RedoCheckpointCoordinate {
+            checkpoints: [
+                RedoHeaderCheckpoint::default(),
+                RedoHeaderCheckpoint::default(),
+            ],
             checkpoint_lsn: None,
             checkpoint_no: None,
             end_lsn: hdr.first_lsn,
@@ -302,10 +321,15 @@ impl Redo {
 
                     if checkpoint_lsn >= checkpoint.checkpoint_lsn.unwrap_or(0) {
                         checkpoint.checkpoint_lsn = Some(checkpoint_lsn);
-                        checkpoint.checkpoint_no =
-                            Some(if pos == CHECKPOINT_1 as usize { 1 } else { 0 });
+                        checkpoint.checkpoint_no = Some(if pos == CHECKPOINT_1 { 1 } else { 0 });
                         checkpoint.end_lsn = end_lsn;
                     }
+
+                    checkpoint.checkpoints[(pos - CHECKPOINT_1) / step] = RedoHeaderCheckpoint {
+                        checkpoint_lsn,
+                        end_lsn,
+                        checksum,
+                    };
                 }
 
                 if hdr.creator.starts_with("Backup ") {
@@ -453,6 +477,10 @@ fn verify_crc_block(block: &[u8], crc: u32) -> (bool, u32) {
 }
 
 impl<'a> RedoReader<'a> {
+    pub fn reader(&self) -> &RingReader<'a> {
+        &self.reader
+    }
+
     pub fn parse_next(&mut self) -> anyhow::Result<Mtr> {
         Mtr::parse_next(&mut self.reader).context("Mtr::parse_next")
     }
@@ -470,7 +498,7 @@ impl RedoHeader {
 
         let creator_len = min(LOG_HEADER_CREATOR_END - LOG_HEADER_CREATOR, creator.len());
         buf[LOG_HEADER_CREATOR..LOG_HEADER_CREATOR + creator_len]
-            .copy_from_slice(creator[..creator_len].as_bytes());
+            .copy_from_slice(&creator.as_bytes()[..creator_len]);
 
         let crc = crc32c(&buf[..LOG_HEADER_CRC]);
         mach::mach_write_to_4(&mut buf[LOG_HEADER_CRC..], crc)?;
@@ -501,22 +529,21 @@ impl RedoHeader {
 
 #[cfg(test)]
 mod test {
-    use std::io::Write;
-
     use super::*;
 
+    #[test]
     fn test_build_header_10_8() {
         let mut buf = [0u8; FIRST_LSN as usize];
         let hdr = RedoHeader::build_unencrypted_header_10_8(FIRST_LSN, "test_creator")
             .expect("Failed to build header");
         let cp = RedoHeader::build_unencrypted_header_10_8_checkpoint(FIRST_LSN, FIRST_LSN)
             .expect("Failed to build checkpoint");
-        buf[0..].write_all(&hdr).expect("Failed to write header");
-        buf[CHECKPOINT_1..]
-            .write_all(&cp)
-            .expect("Failed to write checkpoint");
-        buf[CHECKPOINT_2..]
-            .write_all(&cp)
-            .expect("Failed to write checkpoint");
+        buf[0..hdr.len()].copy_from_slice(&hdr);
+        buf[CHECKPOINT_1..CHECKPOINT_1 + cp.len()].copy_from_slice(&cp);
+        buf[CHECKPOINT_2..CHECKPOINT_2 + cp.len()].copy_from_slice(&cp);
+
+        let header = Redo::parse_header(&buf).expect("Failed to parse header");
+        let _checkpoint =
+            Redo::parse_header_checkpoint(&buf, &header, 0).expect("Failed to parse checkpoint");
     }
 }
