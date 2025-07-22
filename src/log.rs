@@ -405,7 +405,11 @@ impl Redo {
         };
 
         RedoReader {
-            reader: RingReader::buf_at(self.mmap.as_slice(), lsn as usize),
+            reader: RingReader::buf_at(
+                self.mmap.as_slice(),
+                self.hdr.first_lsn as usize,
+                lsn as usize,
+            ),
         }
     }
 
@@ -420,6 +424,8 @@ impl Redo {
     }
 
     /// Determine the sequence bit at a log sequence number.
+    /// The sequence bit is used to determine whether the log record
+    /// corresponds to the current generation (wrap) of the redo log.
     pub fn get_sequence_bit(&self, lsn: Lsn) -> u8 {
         if ((lsn - self.hdr.first_lsn) / self.capacity()) & 1 == 0 {
             0
