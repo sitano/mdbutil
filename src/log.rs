@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::io::Write;
 
 use anyhow::Context;
@@ -301,7 +302,8 @@ impl Redo {
 
                     if checkpoint_lsn >= checkpoint.checkpoint_lsn.unwrap_or(0) {
                         checkpoint.checkpoint_lsn = Some(checkpoint_lsn);
-                        checkpoint.checkpoint_no = Some(pos);
+                        checkpoint.checkpoint_no =
+                            Some(if pos == CHECKPOINT_1 as usize { 1 } else { 0 });
                         checkpoint.end_lsn = end_lsn;
                     }
                 }
@@ -453,5 +455,68 @@ fn verify_crc_block(block: &[u8], crc: u32) -> (bool, u32) {
 impl<'a> RedoReader<'a> {
     pub fn parse_next(&mut self) -> anyhow::Result<Mtr> {
         Mtr::parse_next(&mut self.reader).context("Mtr::parse_next")
+    }
+}
+
+impl RedoHeader {
+    pub fn build_unencrypted_header_10_8(
+        first_lsn: Lsn,
+        creator: &str,
+    ) -> std::io::Result<[u8; 512]> {
+        let mut buf = [0u8; 512];
+
+        mach::mach_write_to_4(&mut buf[LOG_HEADER_FORMAT..], FORMAT_10_8)?;
+        mach::mach_write_to_8(&mut buf[LOG_HEADER_START_LSN..], first_lsn)?;
+
+        let creator_len = min(LOG_HEADER_CREATOR_END - LOG_HEADER_CREATOR, creator.len());
+        buf[LOG_HEADER_CREATOR..LOG_HEADER_CREATOR + creator_len]
+            .copy_from_slice(creator[..creator_len].as_bytes());
+
+        let crc = crc32c(&buf[..LOG_HEADER_CRC]);
+        mach::mach_write_to_4(&mut buf[LOG_HEADER_CRC..], crc)?;
+
+        Ok(buf)
+    }
+
+    // Checkpoint block is 60 bytes long + 4 bytes for the checksum.
+    // - 8 byte: checkpoint_lsn
+    // - 8 byte: end_lsn
+    // - 44 byte: reserved
+    // - 4 byte: checksum
+    pub fn build_unencrypted_header_10_8_checkpoint(
+        checkpoint_lsn: Lsn,
+        end_lsn: Lsn,
+    ) -> std::io::Result<[u8; 64]> {
+        let mut buf = [0u8; 64];
+
+        mach::mach_write_to_8(&mut buf[0..], checkpoint_lsn)?;
+        mach::mach_write_to_8(&mut buf[8..], end_lsn)?;
+
+        let crc = crc32c(&buf[..60]);
+        mach::mach_write_to_4(&mut buf[60..], crc)?;
+
+        Ok(buf)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::io::Write;
+
+    use super::*;
+
+    fn test_build_header_10_8() {
+        let mut buf = [0u8; FIRST_LSN as usize];
+        let hdr = RedoHeader::build_unencrypted_header_10_8(FIRST_LSN, "test_creator")
+            .expect("Failed to build header");
+        let cp = RedoHeader::build_unencrypted_header_10_8_checkpoint(FIRST_LSN, FIRST_LSN)
+            .expect("Failed to build checkpoint");
+        buf[0..].write_all(&hdr).expect("Failed to write header");
+        buf[CHECKPOINT_1..]
+            .write_all(&cp)
+            .expect("Failed to write checkpoint");
+        buf[CHECKPOINT_2..]
+            .write_all(&cp)
+            .expect("Failed to write checkpoint");
     }
 }
