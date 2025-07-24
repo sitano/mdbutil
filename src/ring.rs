@@ -1,14 +1,12 @@
 use std::{
     cmp::min,
-    io::{Error, ErrorKind, Read, Result},
+    io::{Error, ErrorKind, Read, Result, Seek, Write},
     ops::Add,
 };
 
 use crc32c::crc32c;
 
 use crate::mach;
-
-// TODO: support Write
 
 #[derive(Debug, Clone)]
 pub struct RingReader<'a> {
@@ -162,13 +160,132 @@ pub fn pos_to_offset(hdr: usize, body: usize, pos: usize) -> usize {
     hdr + (pos - hdr) % body
 }
 
+#[derive(Debug)]
+pub struct RingWriter<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+    /// The size of the header in the beginning.
+    header: usize,
+}
+
+impl<'a> RingWriter<'a> {
+    pub fn new(buf: &'a mut [u8]) -> RingWriter<'a> {
+        Self::buf_at(buf, 0, 0)
+    }
+
+    /// Creates a new `RingWriter` at the given position in the buffer.
+    /// Buffer must be at least `hdr` bytes long and includes the header.
+    pub fn buf_at(buf: &'a mut [u8], hdr: usize, pos: usize) -> RingWriter<'a> {
+        RingWriter {
+            buf,
+            pos,
+            header: hdr,
+        }
+    }
+
+    /// returns the position in the header+ring_buffer for a given pos.
+    pub fn pos_to_offset(&self, pos: usize) -> usize {
+        pos_to_offset(self.header, self.buf.len() - self.header, pos)
+    }
+
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub fn header(&self) -> usize {
+        self.header
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.buf.len() - self.header
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn ensure(&self, t: usize) -> Result<()> {
+        if self.len() < t {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+
+        Ok(())
+    }
+
+    pub fn advance(&mut self, bytes: usize) {
+        self.pos += bytes;
+    }
+}
+
+impl<'a> Seek for RingWriter<'a> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+        let new_pos = match pos {
+            std::io::SeekFrom::Start(offset) => offset as usize,
+            std::io::SeekFrom::End(offset) => {
+                if offset > 0 && offset as usize > self.pos {
+                    return Err(Error::from(ErrorKind::InvalidInput));
+                }
+
+                if offset < 0 {
+                    self.pos + (-offset) as usize
+                } else {
+                    self.pos - offset as usize
+                }
+            }
+            std::io::SeekFrom::Current(offset) => {
+                if offset < 0 && self.pos < (-offset) as usize {
+                    return Err(Error::from(ErrorKind::InvalidInput));
+                }
+
+                if offset < 0 {
+                    self.pos - (-offset) as usize
+                } else {
+                    self.pos + offset as usize
+                }
+            }
+        };
+
+        self.pos = new_pos;
+
+        Ok(self.pos as u64)
+    }
+}
+
+impl<'a> Write for RingWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let offset0 = self.pos_to_offset(self.pos);
+        let size1 = min(self.buf.len() - offset0, buf.len());
+        self.buf[offset0..offset0 + size1].copy_from_slice(&buf[..size1]);
+
+        self.pos += size1;
+        if size1 == buf.len() {
+            return Ok(size1);
+        }
+
+        let remaining = &buf[size1..];
+        let size2 = min(offset0 - self.header, remaining.len());
+        self.buf[self.header..self.header + size2].copy_from_slice(&remaining[..size2]);
+        self.pos += size2;
+        Ok(size1 + size2)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        // No-op for ring buffer
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use std::io::Read;
+    use std::io::{Read, Seek, Write};
 
     use byteorder::ReadBytesExt;
 
-    use super::RingReader;
+    use super::{RingReader, RingWriter};
 
     #[test]
     fn test_ring_reader() {
@@ -246,5 +363,50 @@ mod test {
         let mut r0 = RingReader::buf_at(buf, 1, 5);
         assert_eq!(r0.pos_to_offset(5), 1);
         assert_eq!(r0.read_u8().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_ring_writer() {
+        let mut storage = [0u8; 10];
+        let buf = &mut storage;
+
+        let mut w0 = RingWriter::new(buf);
+        assert_eq!(w0.write(&[1, 2, 3]).unwrap(), 3);
+        assert_eq!(w0.pos(), 3);
+        assert_eq!(&w0.buf[..3], &[1, 2, 3]);
+
+        w0.seek(std::io::SeekFrom::Start(0)).unwrap();
+        assert_eq!(w0.write(&[4, 5]).unwrap(), 2);
+        assert_eq!(w0.pos(), 2);
+        assert_eq!(&w0.buf[..5], &[4, 5, 3, 0, 0]);
+
+        w0.seek(std::io::SeekFrom::Start(5)).unwrap();
+        assert_eq!(w0.write(&[5, 6, 7, 8, 9]).unwrap(), 5);
+        assert_eq!(w0.pos(), 10);
+        assert_eq!(&w0.buf, &[4, 5, 3, 0, 0, 5, 6, 7, 8, 9]);
+
+        assert_eq!(w0.write(&[4, 5]).unwrap(), 2);
+        assert_eq!(w0.pos(), 12);
+        assert_eq!(&w0.buf[..5], &[4, 5, 3, 0, 0]);
+
+        w0.seek(std::io::SeekFrom::Start(6)).unwrap();
+        assert_eq!(w0.write(&[6, 7, 8, 9, 10]).unwrap(), 5);
+        assert_eq!(w0.pos(), 11);
+        assert_eq!(&w0.buf, &[10, 5, 3, 0, 0, 5, 6, 7, 8, 9]);
+
+        w0.seek(std::io::SeekFrom::Start(2)).unwrap();
+        assert_eq!(w0.write(&[9]).unwrap(), 1);
+        assert_eq!(w0.pos(), 3);
+        assert_eq!(&w0.buf, &[10, 5, 9, 0, 0, 5, 6, 7, 8, 9]);
+
+        w0.seek(std::io::SeekFrom::Start(10)).unwrap();
+        w0.seek(std::io::SeekFrom::Current(1)).unwrap();
+        assert_eq!(w0.pos(), 11);
+        w0.seek(std::io::SeekFrom::Current(-2)).unwrap();
+        assert_eq!(w0.pos(), 9);
+        w0.seek(std::io::SeekFrom::End(1)).unwrap();
+        assert_eq!(w0.pos(), 8);
+        w0.seek(std::io::SeekFrom::End(-1)).unwrap();
+        assert_eq!(w0.pos(), 9);
     }
 }
