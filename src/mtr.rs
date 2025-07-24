@@ -1,13 +1,17 @@
 use std::io::{Error, ErrorKind, Result, Write};
 
-use crate::Lsn;
-use crate::mach::{mach_write_to_4, mach_write_to_8};
-use crate::mtr0log::{mlog_decode_varint, mlog_decode_varint_length};
-use crate::mtr0types::mfile_type_t::FILE_CHECKPOINT;
-use crate::ring::RingReader;
+use crate::{
+    Lsn,
+    mach::{mach_write_to_4, mach_write_to_8},
+    mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
+    mtr0types::mfile_type_t::FILE_CHECKPOINT,
+    ring::RingReader,
+};
 
 /// MTR termination marker.
 /// 0x0 or 0x1 are termination markers.
+/// Termination marker corresponds to LSN by the means of generation:
+///    !(((lsn - header_size) / capacity & 1))
 pub const MTR_END_MARKER: u8 = 1u8;
 
 /// Maximum guaranteed size of a mini-transaction.
@@ -28,7 +32,8 @@ pub struct Mtr {
 
     pub op: u8,
 
-    /// checksum
+    // termination marker
+    pub gen_t_marker: u8,
     pub checksum: u32,
 
     // payload
@@ -43,10 +48,17 @@ impl Mtr {
         peek_not_end_marker(r)?;
 
         let mtr_start = r.clone();
+        let lsn = mtr_start.pos() as Lsn;
         let len = Self::parse_len_byte(r)?;
 
-        // TODO: if (*l != log_sys.get_sequence_bit((l - begin) + lsn))
-        //   return GOT_EOF;
+        let termination_marker_offset = (1 + len) as usize;
+        let termination_byte = (&mtr_start + termination_marker_offset).peek_1()?;
+        let termination_lsn = lsn + termination_marker_offset as u64;
+
+        if termination_byte != get_sequence_bit(r.header(), r.capacity(), termination_lsn) {
+            // EOF because the record is from the previous generation.
+            return Err(Error::from(ErrorKind::NotFound));
+        }
 
         // body length = 1st byte + payload length.
         // mtr also has 1 byte termination marker,
@@ -62,7 +74,8 @@ impl Mtr {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum is invalid, expected {expected_crc:#x}, real {real_crc:#x}",
+                    "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum is invalid, expected \
+                     {expected_crc:#x}, real {real_crc:#x}",
                     pos = mtr_start.pos(),
                     pos_hex = mtr_start.pos(),
                 ),
@@ -126,6 +139,7 @@ impl Mtr {
             space_id,
             page_no,
             op: mtr_op,
+            gen_t_marker: termination_byte,
             checksum: real_crc,
             file_checkpoint_lsn,
         })
@@ -166,7 +180,12 @@ impl Mtr {
         self.len
     }
 
-    pub fn build_file_checkpoint(mut buf: impl Write, lsn: Lsn) -> Result<()> {
+    pub fn build_file_checkpoint(
+        mut buf: impl Write,
+        header: usize,
+        capacity: usize,
+        lsn: Lsn,
+    ) -> Result<()> {
         // 0xfa is FILE_CHECKPOINT + 10b + 1b termination marker + 4b checksum)
         let mut temp = [0u8; 1 + 10 + 1 + 4];
         let mut cursor = std::io::Cursor::new(temp.as_mut_slice());
@@ -175,8 +194,8 @@ impl Mtr {
         cursor.write_all(&[0x00, 0x00])?; // tablespace id + page no
         mach_write_to_8(&mut cursor, lsn)?; // checkpoint LSN
 
-        // TODO: wrap bit
-        cursor.write_all(&[MTR_END_MARKER])?; // termination marker
+        let termination_marker = get_sequence_bit(header, capacity, lsn);
+        cursor.write_all(&[termination_marker])?;
 
         let checksum = crc32c::crc32c(&cursor.get_ref()[..1 + 10]);
         mach_write_to_4(&mut cursor, checksum)?;
@@ -184,6 +203,18 @@ impl Mtr {
         buf.write_all(cursor.get_ref())?;
 
         Ok(())
+    }
+}
+
+/// Determine the sequence bit at a log sequence number.
+/// The sequence bit is used to determine whether the log record
+/// corresponds to the current generation (wrap) of the redo log.
+/// Capacity is the capacity of the ring buffer in bytes (file size - header).
+pub fn get_sequence_bit(header_size: usize, capacity: usize, lsn: Lsn) -> u8 {
+    if (((lsn - header_size as u64) / capacity as u64) & 1) == 0 {
+        1
+    } else {
+        0
     }
 }
 
@@ -201,9 +232,7 @@ pub fn peek_not_end_marker(r: &mut RingReader) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::Mtr;
-
-    use crate::mtr0types::mfile_type_t::FILE_CHECKPOINT;
-    use crate::ring::RingReader;
+    use crate::{mtr0types::mfile_type_t::FILE_CHECKPOINT, ring::RingReader};
 
     #[test]
     fn test_mtr_short_len() {
@@ -221,18 +250,99 @@ mod test {
     }
 
     #[test]
-    fn test_build_file_checkpoint() {
+    fn test_build_file_checkpoint_marker_1() {
         let mut buf = Vec::new();
         let lsn = 0x000000000000de3d;
-        Mtr::build_file_checkpoint(&mut buf, lsn).unwrap();
+        let hdr_size = 0;
+        let fake_capacity = 0xffff;
+        let marker = super::get_sequence_bit(hdr_size, fake_capacity, lsn);
+        Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
-        let mut r0 = RingReader::new(buf.as_slice());
-        let mtr = Mtr::parse_next(&mut r0).unwrap();
+        let r0 = RingReader::new(buf.as_slice());
+        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
         assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
         assert_eq!(mtr.len, 10, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
+
+        assert_eq!(marker, 1);
+        assert_eq!(
+            (&r0 + (buf.len() - 4 - 1)).peek_1().unwrap(),
+            marker,
+            "termination marker"
+        );
+    }
+
+    #[test]
+    fn test_build_file_checkpoint_marker_0() {
+        let mut buf = Vec::new();
+        let lsn = 0x0000000000000030;
+        let hdr_size = 0;
+        let fake_capacity = 0x10;
+        let marker = super::get_sequence_bit(hdr_size, fake_capacity, lsn);
+        Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
+
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
+
+        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.space_id, 0, "space_id");
+        assert_eq!(mtr.page_no, 0, "page_no");
+        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
+
+        assert_eq!(marker, 0);
+        assert_eq!(
+            (&r0 + (buf.len() - 4 - 1)).peek_1().unwrap(),
+            marker,
+            "termination marker"
+        );
+    }
+
+    #[test]
+    fn test_parse_next_respects_old_gen() {
+        let mut buf = Vec::new();
+        // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
+        let lsn = 0x0000000000000030;
+        let hdr_size = 0;
+        let fake_capacity = 0x10;
+        let marker = super::get_sequence_bit(hdr_size, fake_capacity, lsn);
+        Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
+
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
+
+        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.space_id, 0, "space_id");
+        assert_eq!(mtr.page_no, 0, "page_no");
+        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
+
+        assert_eq!(marker, 0);
+        assert_eq!(
+            (&r0 + (buf.len() - 4 - 1)).peek_1().unwrap(),
+            marker,
+            "termination marker"
+        );
+    }
+
+    #[test]
+    fn test_parse_next_can_parse_wrap() {
+        let mut buf0 = Vec::new();
+        // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
+        let lsn = 0x000000000000003a;
+        let hdr_size = 0;
+        let fake_capacity = 0x10;
+        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity, lsn).unwrap();
+
+        let mut buf = vec![0u8; fake_capacity];
+        let offset = lsn as usize % fake_capacity;
+        buf[..offset].copy_from_slice(&buf0[..offset]);
+        buf[offset..].copy_from_slice(&buf0[offset..]);
+
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        assert!(Mtr::parse_next(&mut r0.clone()).is_err());
     }
 }

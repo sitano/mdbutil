@@ -4,15 +4,15 @@ MariaDB experimental utilities for testing and development purposes.
 Redo log parser for 11.8.x:
 
 ```
-$ scripts/mariadb-install-db --datadir ./data
-$ bin/mariadbd --datadir ./data --innodb_fast_shutdown=0
+$ scripts/mariadb-install-db --datadir ./data --innodb-log-file-size=10M
+$ bin/mariadbd --datadir ./data --innodb_fast_shutdown=0 --innodb-log-file-size=10M
 
 $ mycli -S /tmp/mysql.sock
 > CREATE TABLE a (id int not null auto_increment primary key, t TEXT);
-> SET max_recursive_iterations = 20000;
+> SET max_recursive_iterations = 1000000;
 > INSERT INTO a (t)
   WITH RECURSIVE fill(n) AS (
-    SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 16384
+    SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 60500
   )
   SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
 $ pkill mariadbd

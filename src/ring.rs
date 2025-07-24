@@ -1,11 +1,13 @@
-use std::cmp::min;
-use std::io::{Error, ErrorKind, Read, Result};
+use std::{
+    cmp::min,
+    io::{Error, ErrorKind, Read, Result},
+    ops::Add,
+};
 
 use crc32c::crc32c;
 
 use crate::mach;
 
-// TODO: move to u64?
 // TODO: support Write
 
 #[derive(Debug, Clone)]
@@ -26,7 +28,7 @@ impl<'a> RingReader<'a> {
     pub fn buf_at(buf: &'a [u8], hdr: usize, pos: usize) -> RingReader<'a> {
         RingReader {
             buf,
-            pos: pos_to_offset(hdr, buf.len() - hdr, pos),
+            pos,
             header: hdr,
         }
     }
@@ -49,6 +51,10 @@ impl<'a> RingReader<'a> {
 
     pub fn pos(&self) -> usize {
         self.pos
+    }
+
+    pub fn header(&self) -> usize {
+        self.header
     }
 
     pub fn capacity(&self) -> usize {
@@ -130,6 +136,16 @@ impl<'a> Read for RingReader<'a> {
     }
 }
 
+impl<'a> Add<usize> for &RingReader<'a> {
+    type Output = RingReader<'a>;
+
+    fn add(self, bytes: usize) -> Self::Output {
+        let mut new_reader = self.clone();
+        new_reader.advance(bytes);
+        new_reader
+    }
+}
+
 /// returns the position in the header+ring_buffer for a given pos.
 pub fn pos_to_offset(hdr: usize, body: usize, pos: usize) -> usize {
     if pos < hdr {
@@ -141,8 +157,9 @@ pub fn pos_to_offset(hdr: usize, body: usize, pos: usize) -> usize {
 
 #[cfg(test)]
 mod test {
-    use byteorder::ReadBytesExt;
     use std::io::Read;
+
+    use byteorder::ReadBytesExt;
 
     use super::RingReader;
 

@@ -1,13 +1,9 @@
 use std::io::{Seek, Write};
 
 use clap::Parser;
-
-use mdbutil::config::Config;
-use mdbutil::log;
-use mdbutil::mtr::Mtr;
-use mdbutil::mtr0types::mfile_type_t::FILE_CHECKPOINT;
-use mdbutil::ring::RingReader;
-use mdbutil::Lsn;
+use mdbutil::{
+    Lsn, config::Config, log, mtr::Mtr, mtr0types::mfile_type_t::FILE_CHECKPOINT, ring::RingReader,
+};
 
 fn main() {
     let config = Config::parse();
@@ -15,7 +11,7 @@ fn main() {
     let log = log::Redo::open(&log_file_path).expect("Failed to open redo log");
 
     println!("Header block: {}", log.header().first_lsn);
-    println!("Size: {}, Capacity: {:#x}", log.size(), log.capacity());
+    println!("Size: {}, Capacity: {}", log.size(), log.capacity());
 
     println!("{:#?}", log.header());
     println!("{:#?}", log.checkpoint());
@@ -75,7 +71,10 @@ fn main() {
         let dst = config.srv_log_group_home_dir.join("ib_logfile0.new");
 
         let mut file_checkpoint = vec![];
-        Mtr::build_file_checkpoint(&mut file_checkpoint, file_checkpoint_lsn).unwrap();
+        let header = log.header().first_lsn as usize;
+        let capacity = log.capacity() as usize;
+        Mtr::build_file_checkpoint(&mut file_checkpoint, header, capacity, file_checkpoint_lsn)
+            .unwrap();
         file_checkpoint.push(0x0); // end marker
 
         let mut r0 = RingReader::new(file_checkpoint.as_slice());
@@ -99,7 +98,8 @@ fn main() {
 
         println!("New MTR: {mtr:#?}");
         println!(
-            "Writing file checkpoint: {file_checkpoint:#x?} at pos: {target_offset} ({target_offset:#x})"
+            "Writing file checkpoint: {file_checkpoint:#x?} at pos: {target_offset} \
+             ({target_offset:#x})"
         );
 
         let mut file_writer = std::fs::OpenOptions::new()

@@ -1,14 +1,10 @@
-use std::cmp::min;
-use std::io::Write;
-use std::path::PathBuf;
+use std::{cmp::min, io::Write, path::PathBuf};
 
-use anyhow::bail;
-use anyhow::Context;
+use anyhow::{Context, bail};
 use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
-use crate::Lsn;
-use crate::{config::Config, mach, mtr::Mtr, ring::RingReader};
+use crate::{Lsn, config::Config, mach, mtr, mtr::Mtr, ring::RingReader};
 
 // According to Linux "man 2 read" and "man 2 write" this applies to
 // both 32-bit and 64-bit systems.
@@ -162,7 +158,8 @@ impl Redo {
             // Multiple ones are possible if we are upgrading from before MariaDB Server 10.5.1.
             // We do not support that.
             return Err(anyhow::anyhow!(
-                "multiple redo log files found. upgrading from before MariaDB Server 10.5.1 is not supported"
+                "multiple redo log files found. upgrading from before MariaDB Server 10.5.1 is \
+                 not supported"
             ));
         }
 
@@ -212,7 +209,8 @@ impl Redo {
 
             if file_size != size {
                 return Err(anyhow::anyhow!(
-                    "log file {path} has unexpected size: {file_size} bytes, expected {size} bytes. all log files in a group must have the same size",
+                    "log file {path} has unexpected size: {file_size} bytes, expected {size} \
+                     bytes. all log files in a group must have the same size",
                     path = log_file_x_path.display(),
                 ));
             }
@@ -315,7 +313,9 @@ impl Redo {
                     {
                         writeln!(
                             std::io::stderr(),
-                            "InnoDB: Invalid checkpoint at {pos}: checkpoint_lsn={checkpoint_lsn}, end_lsn={end_lsn}, reserved={reserved:?}, checksum={checksum}"
+                            "InnoDB: Invalid checkpoint at {pos}: \
+                             checkpoint_lsn={checkpoint_lsn}, end_lsn={end_lsn}, \
+                             reserved={reserved:?}, checksum={checksum}"
                         )?;
                     }
 
@@ -351,7 +351,8 @@ impl Redo {
                     if !ok {
                         writeln!(
                             std::io::stderr(),
-                            "InnoDB: Invalid checkpoint checksum at {pos}: expected {crc}, got {hdr_crc}"
+                            "InnoDB: Invalid checkpoint checksum at {pos}: expected {crc}, got \
+                             {hdr_crc}"
                         )?;
                         continue;
                     }
@@ -453,11 +454,7 @@ impl Redo {
     /// The sequence bit is used to determine whether the log record
     /// corresponds to the current generation (wrap) of the redo log.
     pub fn get_sequence_bit(&self, lsn: Lsn) -> u8 {
-        if ((lsn - self.hdr.first_lsn) / self.capacity()) & 1 == 0 {
-            0
-        } else {
-            1
-        }
+        mtr::get_sequence_bit(self.hdr.first_lsn as usize, self.capacity() as usize, lsn)
     }
 }
 
