@@ -38,15 +38,22 @@ impl<'a> RingReader<'a> {
         pos_to_offset(self.header, self.buf.len() - self.header, pos)
     }
 
-    // TODO: implement wrap
-    pub fn block(&self, size: usize) -> &[u8] {
+    pub fn block(&self, buf: &mut [u8]) {
         let start = self.pos_to_offset(self.pos);
-        let end = self.pos_to_offset(self.pos + size);
-        &self.buf[start..end]
+        let end = self.pos_to_offset(self.pos + buf.len());
+        if start < end {
+            buf.copy_from_slice(&self.buf[start..end]);
+        } else {
+            let size1 = self.buf.len() - start;
+            buf[..size1].copy_from_slice(&self.buf[start..]);
+            buf[size1..].copy_from_slice(&self.buf[self.header..end]);
+        }
     }
 
     pub fn crc32c(&self, size: usize) -> u32 {
-        crc32c(self.block(size))
+        let mut buf = vec![0u8; size];
+        self.block(&mut buf);
+        crc32c(&buf)
     }
 
     pub fn pos(&self) -> usize {

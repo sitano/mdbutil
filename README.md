@@ -19,7 +19,7 @@ $ pkill mariadbd
 $ cargo run -- --log-group-path data
 
 Header block: 12288
-Size: 100663296, Capacity: 0x5ffd000
+Size: 10485760, Capacity: 10473472
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
@@ -27,13 +27,25 @@ RedoHeader {
     crc: 224651864,
 }
 RedoCheckpointCoordinate {
+    checkpoints: [
+        RedoHeaderCheckpoint {
+            checkpoint_lsn: 10474046,
+            end_lsn: 10474046,
+            checksum: 3618321683,
+        },
+        RedoHeaderCheckpoint {
+            checkpoint_lsn: 10474015,
+            end_lsn: 10474015,
+            checksum: 3405426044,
+        },
+    ],
     checkpoint_lsn: Some(
-        56893,
+        10474046,
     ),
     checkpoint_no: Some(
-        8192,
+        1,
     ),
-    end_lsn: 56893,
+    end_lsn: 10474046,
     encrypted: false,
     version: 1349024115,
     start_after_restore: false,
@@ -43,12 +55,25 @@ Mtr {
     space_id: 0,
     page_no: 0,
     op: 240,
-    checksum: 530797207,
+    gen_t_marker: 1,
+    checksum: 1749635938,
     file_checkpoint_lsn: Some(
-        56893,
+        10474046,
     ),
 }
-File checkpoint LSN: 56893
+Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 10474046, end_lsn: 10474046, checksum: 3618321683 }
+Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 10474015, end_lsn: 10474015, checksum: 3405426044 }
+File checkpoint LSN: 10474046
+
+# add 99 rows 1 byte each.
+> INSERT INTO a (t)
+> WITH RECURSIVE fill(n) AS (
+>   SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 99) SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 1, 'x') FROM fill;
+
+# add 1 row 134 bytes.
+> INSERT INTO a (t)
+> WITH RECURSIVE fill(n) AS (
+>   SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 1) SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 134, 'x') FROM fill;
 ```
 
 to craft fake redo log file checkpoint use `--write`. MariaDB ensures that:

@@ -329,10 +329,28 @@ mod test {
     }
 
     #[test]
-    fn test_parse_next_can_parse_wrap() {
+    fn test_parse_next_can_parse_wrap_with_invalid_marker() {
         let mut buf0 = Vec::new();
         // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
         let lsn = 0x000000000000003a;
+        let hdr_size = 0;
+        let fake_capacity = 0x10;
+        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity, lsn).unwrap();
+
+        let mut buf = vec![0u8; fake_capacity];
+        let offset = lsn as usize % fake_capacity;
+        buf[..offset].copy_from_slice(&buf0[..offset]);
+        buf[offset..].copy_from_slice(&buf0[offset..]);
+
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        assert!(Mtr::parse_next(&mut r0.clone()).is_err());
+    }
+
+    #[test]
+    fn test_parse_next_can_parse_wrap_with_valid_marker() {
+        let mut buf0 = Vec::new();
+        // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
+        let lsn = 0x000000000000002a;
         let hdr_size = 0;
         let fake_capacity = 0x10;
         Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity, lsn).unwrap();
