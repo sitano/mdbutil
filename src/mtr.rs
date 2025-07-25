@@ -55,8 +55,9 @@ impl Mtr {
         let termination_byte = (&mtr_start + termination_marker_offset).peek_1()?;
         let termination_lsn = lsn + termination_marker_offset as u64;
 
-        if termination_byte != get_sequence_bit(r.header(), r.capacity(), termination_lsn) {
-            // EOF because the record is from the previous generation.
+        if termination_byte
+            != get_sequence_bit(r.header() as u64, r.capacity() as u64, termination_lsn)
+        {
             return Err(Error::from(ErrorKind::NotFound));
         }
 
@@ -182,8 +183,8 @@ impl Mtr {
 
     pub fn build_file_checkpoint(
         mut buf: impl Write,
-        header: usize,
-        capacity: usize,
+        header: u64,
+        capacity: u64,
         lsn: Lsn,
     ) -> Result<()> {
         // 0xfa is FILE_CHECKPOINT + 10b + 1b termination marker + 4b checksum)
@@ -194,7 +195,7 @@ impl Mtr {
         cursor.write_all(&[0x00, 0x00])?; // tablespace id + page no
         mach_write_to_8(&mut cursor, lsn)?; // checkpoint LSN
 
-        let termination_marker = get_sequence_bit(header, capacity, lsn);
+        let termination_marker = get_sequence_bit(header, capacity, lsn + 1 + 2 + 8);
         cursor.write_all(&[termination_marker])?;
 
         let checksum = crc32c::crc32c(&cursor.get_ref()[..1 + 10]);
@@ -210,8 +211,8 @@ impl Mtr {
 /// The sequence bit is used to determine whether the log record
 /// corresponds to the current generation (wrap) of the redo log.
 /// Capacity is the capacity of the ring buffer in bytes (file size - header).
-pub fn get_sequence_bit(header_size: usize, capacity: usize, lsn: Lsn) -> u8 {
-    if (((lsn - header_size as u64) / capacity as u64) & 1) == 0 {
+pub fn get_sequence_bit(header_size: u64, capacity: u64, lsn: Lsn) -> u8 {
+    if (((lsn - header_size) / capacity) & 1) == 0 {
         1
     } else {
         0
@@ -284,7 +285,7 @@ mod test {
         let marker = super::get_sequence_bit(hdr_size, fake_capacity, lsn);
         Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
-        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
         assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
@@ -311,7 +312,7 @@ mod test {
         let marker = super::get_sequence_bit(hdr_size, fake_capacity, lsn);
         Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
-        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
         assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
@@ -334,15 +335,15 @@ mod test {
         // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
         let lsn = 0x000000000000003a;
         let hdr_size = 0;
-        let fake_capacity = 0x10;
-        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity, lsn).unwrap();
+        let fake_capacity = 0x10usize;
+        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity as u64, lsn).unwrap();
 
         let mut buf = vec![0u8; fake_capacity];
         let offset = lsn as usize % fake_capacity;
         buf[..offset].copy_from_slice(&buf0[..offset]);
         buf[offset..].copy_from_slice(&buf0[offset..]);
 
-        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         assert!(Mtr::parse_next(&mut r0.clone()).is_err());
     }
 
@@ -352,15 +353,15 @@ mod test {
         // 0x30 / 0x10 = 0x3 & 1 = 1, so the sequence bit is 0.
         let lsn = 0x000000000000002a;
         let hdr_size = 0;
-        let fake_capacity = 0x10;
-        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity, lsn).unwrap();
+        let fake_capacity = 0x10usize;
+        Mtr::build_file_checkpoint(&mut buf0, hdr_size, fake_capacity as u64, lsn).unwrap();
 
         let mut buf = vec![0u8; fake_capacity];
         let offset = lsn as usize % fake_capacity;
         buf[..offset].copy_from_slice(&buf0[..offset]);
         buf[offset..].copy_from_slice(&buf0[offset..]);
 
-        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size, lsn as usize);
+        let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         assert!(Mtr::parse_next(&mut r0.clone()).is_err());
     }
 }

@@ -1,10 +1,20 @@
-use std::{cmp::min, io::Write, path::PathBuf};
+use std::{
+    cmp::min,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, bail};
 use crc32c::crc32c;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
-use crate::{Lsn, config::Config, mach, mtr, mtr::Mtr, ring::RingReader};
+use crate::{
+    Lsn,
+    config::Config,
+    mach,
+    mtr::{self, Mtr},
+    ring::{MmapRingWriter, RingReader},
+};
 
 // According to Linux "man 2 read" and "man 2 write" this applies to
 // both 32-bit and 64-bit systems.
@@ -136,7 +146,6 @@ impl Redo {
             ));
         }
 
-        // TODO: support Write
         let mmap = unsafe {
             MmapOptions::new(log_size as usize)
                 .context("mmap option")?
@@ -424,6 +433,34 @@ impl Redo {
         todo!("Handle log encryption header parsing");
     }
 
+    pub fn writer(file: &Path, header: usize, size: u64) -> anyhow::Result<MmapRingWriter> {
+        let log_file = std::fs::File::create(file)
+            .with_context(|| format!("open log file at {}", file.display()))?;
+
+        log_file
+            .set_len(size)
+            .with_context(|| format!("set log file size to {size} bytes"))?;
+
+        drop(log_file);
+
+        let log_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file)
+            .with_context(|| format!("open log file at {}", file.display()))?;
+
+        let mmap = unsafe {
+            MmapOptions::new(size as usize)
+                .context("mmap option")?
+                .with_file(&log_file, 0u64)
+                .with_flags(MmapFlags::SHARED)
+                .map_mut()
+                .context("mmap log file")?
+        };
+
+        Ok(MmapRingWriter::new(mmap, header))
+    }
+
     pub fn reader(&self) -> RedoReader<'_> {
         let lsn = if let Some(lsn) = self.checkpoint.checkpoint_lsn {
             lsn
@@ -454,7 +491,7 @@ impl Redo {
     /// The sequence bit is used to determine whether the log record
     /// corresponds to the current generation (wrap) of the redo log.
     pub fn get_sequence_bit(&self, lsn: Lsn) -> u8 {
-        mtr::get_sequence_bit(self.hdr.first_lsn as usize, self.capacity() as usize, lsn)
+        mtr::get_sequence_bit(self.hdr.first_lsn, self.capacity(), lsn)
     }
 }
 
@@ -526,7 +563,13 @@ impl RedoHeader {
 
 #[cfg(test)]
 mod test {
+    use std::{
+        io::{Seek, Write},
+        path::Path,
+    };
+
     use super::*;
+    use crate::{mtr::Mtr, mtr0types::mfile_type_t::FILE_CHECKPOINT};
 
     #[test]
     fn test_build_header_10_8() {
@@ -542,5 +585,126 @@ mod test {
         let header = Redo::parse_header(&buf).expect("Failed to parse header");
         let _checkpoint =
             Redo::parse_header_checkpoint(&buf, &header, 0).expect("Failed to parse checkpoint");
+    }
+
+    #[test]
+    fn test_checkpoint_builder() {
+        let size = 10u64 * 1024 * 1024; // 10 MB
+
+        let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        for lsn in size - 128..=size + 128 {
+            make_redo_log_file(path, size, lsn).expect("Failed to create redo log file");
+            parse_redo_log_file(path, lsn).expect("Failed to parse redo log file");
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_at_12288() {
+        let size = 10u64 * 1024 * 1024; // 10 MB
+        let lsn = FIRST_LSN;
+
+        let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        make_redo_log_file(path, size, lsn).expect("Failed to create redo log file");
+        parse_redo_log_file(path, lsn).expect("Failed to parse redo log file");
+    }
+
+    #[test]
+    fn test_checkpoint_at_10485749() {
+        let size = 10u64 * 1024 * 1024; // 10 MB
+        let lsn = 10485749 as Lsn;
+
+        let temp_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        make_redo_log_file(path, size, lsn).expect("Failed to create redo log file");
+        parse_redo_log_file(path, lsn).expect("Failed to parse redo log file");
+    }
+
+    fn make_redo_log_file(path: &Path, size: u64, lsn: Lsn) -> std::io::Result<()> {
+        let first_lsn = FIRST_LSN;
+        let capacity = size - first_lsn;
+
+        let mut log =
+            Redo::writer(path, first_lsn as usize, size).map_err(std::io::Error::other)?;
+        let mut writer = log.writer();
+
+        let header = RedoHeader::build_unencrypted_header_10_8(first_lsn, "test_creator")?;
+        writer.seek(std::io::SeekFrom::Start(0))?;
+        writer.write_all(&header)?;
+
+        let checkpoint = RedoHeader::build_unencrypted_header_10_8_checkpoint(lsn, lsn)?;
+        writer.seek(std::io::SeekFrom::Start(CHECKPOINT_1 as u64))?;
+        writer.write_all(&checkpoint)?;
+
+        writer.seek(std::io::SeekFrom::Start(CHECKPOINT_2 as u64))?;
+        writer.write_all(&checkpoint)?;
+
+        let mut file_checkpoint = vec![];
+        Mtr::build_file_checkpoint(&mut file_checkpoint, first_lsn, capacity, lsn).unwrap();
+        file_checkpoint.push(0x0); // end marker
+
+        writer.seek(std::io::SeekFrom::Start(lsn))?;
+        writer.write_all(&file_checkpoint)?;
+
+        Ok(())
+    }
+
+    fn parse_redo_log_file(path: &Path, lsn: Lsn) -> anyhow::Result<()> {
+        let log = Redo::open(&path.to_path_buf())?;
+
+        assert_eq!(log.hdr.first_lsn, FIRST_LSN);
+        assert!(!log.checkpoint.encrypted);
+        assert_eq!(log.checkpoint.checkpoint_lsn, Some(lsn));
+        assert_eq!(log.checkpoint.end_lsn, lsn);
+
+        let mut file_checkpoint_lsn = None;
+        let mut reader = log.reader();
+        let mut mtrs = 0usize;
+
+        loop {
+            let mtr = match reader.parse_next() {
+                Ok(mtr) => mtr,
+                Err(err) => {
+                    // test for EOM.
+                    if let Some(err) = err.downcast_ref::<std::io::Error>()
+                        && err.kind() == std::io::ErrorKind::NotFound
+                    {
+                        break;
+                    }
+
+                    panic!("Failed to parse MTR: {err}");
+                }
+            };
+
+            mtrs += 1;
+
+            if mtr.op == FILE_CHECKPOINT as u8 {
+                file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+            }
+        }
+
+        if mtrs != 1 {
+            let filename = path.file_name().unwrap().to_string_lossy();
+            std::fs::copy(path, filename.to_string()).expect("Failed to copy redo log file");
+        }
+
+        assert!(
+            mtrs == 1,
+            "Expected 1 MTR, found {mtrs} at checkpoint pos {lsn} (see {filename})",
+            filename = path.file_name().unwrap().to_string_lossy()
+        );
+
+        assert_eq!(
+            file_checkpoint_lsn,
+            Some(lsn),
+            "Expected file checkpoint LSN to be {lsn}, found {file_checkpoint_lsn:?} (see \
+             {path:?})"
+        );
+
+        Ok(())
     }
 }

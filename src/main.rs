@@ -71,8 +71,8 @@ fn main() {
         let dst = config.srv_log_group_home_dir.join("ib_logfile0.new");
 
         let mut file_checkpoint = vec![];
-        let header = log.header().first_lsn as usize;
-        let capacity = log.capacity() as usize;
+        let header = log.header().first_lsn;
+        let capacity = log.capacity();
         Mtr::build_file_checkpoint(&mut file_checkpoint, header, capacity, file_checkpoint_lsn)
             .unwrap();
         file_checkpoint.push(0x0); // end marker

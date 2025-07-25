@@ -5,6 +5,7 @@ use std::{
 };
 
 use crc32c::crc32c;
+use mmap_rs::MmapMut;
 
 use crate::mach;
 
@@ -276,6 +277,21 @@ impl<'a> Write for RingWriter<'a> {
     fn flush(&mut self) -> Result<()> {
         // No-op for ring buffer
         Ok(())
+    }
+}
+
+pub struct MmapRingWriter {
+    m: MmapMut,
+    h: usize,
+}
+
+impl MmapRingWriter {
+    pub fn new(m: MmapMut, h: usize) -> MmapRingWriter {
+        MmapRingWriter { m, h }
+    }
+
+    pub fn writer(&mut self) -> RingWriter<'_> {
+        RingWriter::buf_at(&mut self.m, self.h, 0)
     }
 }
 
