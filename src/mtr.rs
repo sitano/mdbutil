@@ -7,6 +7,7 @@ use crate::{
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
     mtr0types::MtrOperation,
     mtr0types::mfile_type_t::FILE_CHECKPOINT,
+    mtr0types::mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
     ring::RingReader,
 };
 
@@ -23,29 +24,33 @@ pub const MTR_SIZE_MAX: u32 = 1u32 << 20;
 pub const TRX_SYS_SPACE: u32 = 0;
 
 #[allow(dead_code)]
-#[derive(Debug)]
-pub struct Mtr {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MtrChain {
+    pub lsn: Lsn,
     /// total mtr length including 1st byte, termination marker and checksum.
     pub len: u32,
+    pub checksum: u32,
+    pub mtr: Vec<Mtr>,
+}
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mtr {
     /// tablespace id
     pub space_id: u32,
     pub page_no: u32,
 
     pub op: MtrOperation,
 
-    // termination marker
-    pub marker: u8,
-    pub checksum: u32,
-
-    // payload
-    //
     // FILE_CHECKPOINT LSN, if any.
     pub file_checkpoint_lsn: Option<Lsn>,
+
+    // termination marker
+    pub marker: u8,
 }
 
 #[allow(clippy::len_without_is_empty)]
-impl Mtr {
+impl MtrChain {
     pub fn parse_next(r: &mut RingReader) -> Result<Self> {
         peek_not_end_marker(r)?;
 
@@ -85,77 +90,154 @@ impl Mtr {
             ));
         }
 
-        // TODO: for parsing loop
-
         // println!(
         //     "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum {real_crc:#x}",
         //     pos = mtr_start.pos(),
         //     pos_hex = mtr_start.pos(),
         //     len = termination_marker_offset + 1 + 4,
         // );
-        // let mut buf = vec![0u8; termination_marker_offset + 1 + 4];
-        // mtr_start.block(buf.as_mut_slice());
-        // println!("mtr: {buf:x?}");
+
+        // Parse MTR chain.
+        let mut chain = MtrChain {
+            lsn,
+            len: termination_marker_offset as u32 + 1 + 4,
+            checksum: real_crc,
+            mtr: Vec::new(),
+        };
 
         let mut l = mtr_start.clone();
-        let recs = l.clone();
-        l.advance(1);
+        let mut rlen: u32;
+        // let mut last_offset = 0u32;
+        let mut got_page_op = false;
+        let mut space_id = 0u32;
+        let mut page_no = 0u32;
 
-        let b = recs.peek_1()?;
+        loop {
+            // println!(
+            //     "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum {real_crc:#x}",
+            //     pos = mtr_start.pos(),
+            //     pos_hex = mtr_start.pos(),
+            //     len = termination_marker_offset + 1 + 4,
+            // );
+            // let mut buf = vec![0u8; termination_marker_offset + 1 + 4];
+            // mtr_start.block(buf.as_mut_slice());
+            // println!("mtr: {buf:x?}");
 
-        // move past varint length.
-        let mut rlen = (b & 0xf) as u32;
-        if rlen == 0 {
-            let lenlen = mlog_decode_varint_length(l.peek_1()?);
-            let addlen = mlog_decode_varint(&mut l)?;
-            rlen = addlen + 15 - lenlen as u32;
-            l.advance(lenlen as usize);
-        }
+            let recs = l.clone();
+            l.advance(1);
 
-        // TODO: if ((b & 0x80) && got_page_op) {}
+            let b = recs.peek_1()?;
 
-        let space_id_len = mlog_decode_varint_length(l.peek_1()?);
-        let space_id = mlog_decode_varint(&mut l)?;
-        // l.advance()
-        rlen -= space_id_len as u32;
-
-        let page_no_len = mlog_decode_varint_length(l.peek_1()?);
-        let page_no = mlog_decode_varint(&mut l)?;
-        // l.advance()
-        rlen -= page_no_len as u32;
-
-        let mut mtr_op = 0;
-        let mut file_checkpoint_lsn = None;
-        let got_page_op = b & 0x80 == 0;
-
-        if got_page_op {
-            // page op
-            mtr_op = b & 0x70;
-        } else if rlen > 0 {
-            // file op
-            mtr_op = b & 0xf0;
-
-            if mtr_op == FILE_CHECKPOINT as u8 {
-                let lsn = l.read_8()? as Lsn;
-                file_checkpoint_lsn = Some(lsn);
+            if b & 0x70 != RESERVED as u8 {
+                // fine
+            } else {
+                eprintln!("InnoDB: Ignoring unknown log record at LSN {}", l.pos());
             }
-        } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
-            // nothing
-        } else {
-            todo!("malformed");
+
+            if peek_not_end_marker(&recs).is_err() {
+                // EOM found.
+                break;
+            }
+
+            // move past varint length.
+            rlen = (b & 0xf) as u32;
+            if rlen == 0 {
+                let lenlen = mlog_decode_varint_length(l.peek_1()?);
+                let addlen = mlog_decode_varint(&mut l)?;
+                rlen = addlen + 15 - lenlen as u32 - 4;
+                l.advance(lenlen as usize);
+            }
+
+            // println!(
+            //     "rlen: {rlen}, b = {b:#x}, op = {op2:?}, lsn = {:x}, pos = {:x}",
+            //     l.pos(),
+            //     l.pos_to_offset(l.pos())
+            // );
+
+            // If MTR is not a page op over the same page read the space id and page no.
+            // not ((b & 0x80 != 0) && got_page_op)
+            if !got_page_op || b & 0x80 == 0 {
+                let space_id_len = mlog_decode_varint_length(l.peek_1()?);
+                space_id = mlog_decode_varint(&mut l)?;
+                if rlen < space_id_len as u32 {
+                    eprintln!(
+                        "InnoDB: Ignoring malformed log record at LSN {}: space_id_len {} < rlen {}",
+                        l.pos(),
+                        space_id_len,
+                        rlen
+                    );
+                    break;
+                }
+                rlen -= space_id_len as u32;
+
+                let page_no_len = mlog_decode_varint_length(l.peek_1()?);
+                page_no = mlog_decode_varint(&mut l)?;
+                if rlen < page_no_len as u32 {
+                    eprintln!(
+                        "InnoDB: Ignoring malformed log record at LSN {}: page_no_len {} < rlen {}",
+                        l.pos(),
+                        page_no_len,
+                        rlen
+                    );
+                    break;
+                }
+                rlen -= page_no_len as u32;
+
+                got_page_op = b & 0x80 == 0;
+            } else {
+                // TODO: verify the same page op precond.
+                // This record is for the same page as the previous one.
+                if (b & 0x70) <= INIT_PAGE as u8 {
+                    // record is corrupted.
+                    // FREE_PAGE,INIT_PAGE cannot be with same_page flag.
+                    eprintln!("InnoDB: Ignoring malformed log record at LSN {}", l.pos());
+                    // the next record must not be same_page.
+                    continue;
+                }
+                // DBUG_PRINT("ib_log",
+                //            ("scan " LSN_PF ": rec %x len %zu page %u:%u",
+                //             lsn, b, l - recs + rlen, space_id, page_no));
+            }
+
+            let mut mtr_op = 0;
+            let mut file_checkpoint_lsn = None;
+
+            if got_page_op {
+                // page op
+                mtr_op = b & 0x70;
+
+                if mtr_op == MEMSET as u8 {
+                    let olen = mlog_decode_varint_length(l.peek_1()?);
+                    let _offset = mlog_decode_varint(&mut l)?;
+
+                    rlen -= olen as u32;
+                }
+            } else if rlen > 0 {
+                // file op
+                mtr_op = b & 0xf0;
+
+                if mtr_op == FILE_CHECKPOINT as u8 {
+                    let lsn = l.read_8()? as Lsn;
+                    file_checkpoint_lsn = Some(lsn);
+                }
+            } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
+                // nothing
+            } else {
+                todo!("malformed");
+            }
+
+            chain.mtr.push(Mtr {
+                space_id,
+                page_no,
+                op: MtrOperation::try_from(mtr_op)?,
+                file_checkpoint_lsn,
+                marker: termination_byte,
+            });
+
+            l.advance(rlen as usize);
         }
 
-        // TODO: l+= log_sys.is_encrypted() ? 4U + 8U : 4U;
-
-        Ok(Mtr {
-            len: termination_marker_offset as u32 + 1 + 4,
-            space_id,
-            page_no,
-            op: mtr_op.into(),
-            marker: termination_byte,
-            checksum: real_crc,
-            file_checkpoint_lsn,
-        })
+        Ok(chain)
     }
 
     /// Looks through the MTR chain end finds the end marker.
@@ -195,7 +277,9 @@ impl Mtr {
     pub fn len(&self) -> u32 {
         self.len
     }
+}
 
+impl Mtr {
     pub fn build_file_checkpoint(
         mut buf: impl Write,
         header: u64,
@@ -222,12 +306,22 @@ impl Mtr {
     }
 }
 
+impl Display for MtrChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MtrChain {{ len: {}, checksum: {}, mtr: {:?} }}",
+            self.len, self.checksum, self.mtr
+        )
+    }
+}
+
 impl Display for Mtr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Mtr {{ len: {}, space_id: {}, page_no: {}, op: {:?} }}",
-            self.len, self.space_id, self.page_no, self.op
+            "Mtr {{ space_id: {}, page_no: {}, op: {:?} }}",
+            self.space_id, self.page_no, self.op
         )
     }
 }
@@ -245,7 +339,7 @@ pub fn get_sequence_bit(header_size: u64, capacity: u64, lsn: Lsn) -> u8 {
 }
 
 /// test for EOF. tests if reader points at termination byte marker.
-pub fn peek_not_end_marker(r: &mut RingReader) -> Result<()> {
+pub fn peek_not_end_marker(r: &RingReader) -> Result<()> {
     // 0x0 or 0x1 are termination markers.
     if r.peek_1()? <= MTR_END_MARKER {
         // EOF
@@ -257,7 +351,7 @@ pub fn peek_not_end_marker(r: &mut RingReader) -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::Mtr;
+    use super::{Mtr, MtrChain};
     use crate::{mtr0types::MtrOperation, ring::RingReader};
 
     #[test]
@@ -271,8 +365,8 @@ mod test {
         ];
         let buf = &storage;
         let mut r0 = RingReader::new(buf);
-        let mtr = Mtr::parse_next(&mut r0).unwrap();
-        assert_eq!(mtr.len, 16, "len");
+        let chain = MtrChain::parse_next(&mut r0).unwrap();
+        assert_eq!(chain.len, 16, "len");
     }
 
     #[test]
@@ -285,12 +379,14 @@ mod test {
         Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
         let r0 = RingReader::new(buf.as_slice());
-        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
+        let chain = MtrChain::parse_next(&mut r0.clone()).unwrap();
 
+        assert_eq!(chain.len, 16, "len");
+
+        let mtr = &chain.mtr[0];
         assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 1);
@@ -311,12 +407,14 @@ mod test {
         Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
-        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
+        let chain = MtrChain::parse_next(&mut r0.clone()).unwrap();
 
+        assert_eq!(chain.len, 16, "len");
+
+        let mtr = &chain.mtr[0];
         assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 0);
@@ -338,12 +436,14 @@ mod test {
         Mtr::build_file_checkpoint(&mut buf, hdr_size, fake_capacity, lsn).unwrap();
 
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
-        let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
+        let chain = MtrChain::parse_next(&mut r0.clone()).unwrap();
 
+        assert_eq!(chain.len, 16, "len");
+
+        let mtr = &chain.mtr[0];
         assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 0);
@@ -369,7 +469,7 @@ mod test {
         buf[offset..].copy_from_slice(&buf0[offset..]);
 
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
-        assert!(Mtr::parse_next(&mut r0.clone()).is_err());
+        assert!(MtrChain::parse_next(&mut r0.clone()).is_err());
     }
 
     #[test]
@@ -387,6 +487,6 @@ mod test {
         buf[offset..].copy_from_slice(&buf0[offset..]);
 
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
-        assert!(Mtr::parse_next(&mut r0.clone()).is_err());
+        assert!(MtrChain::parse_next(&mut r0.clone()).is_err());
     }
 }

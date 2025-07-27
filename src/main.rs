@@ -1,7 +1,9 @@
 use std::io::{Seek, Write};
 
 use clap::Parser;
-use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring::RingReader};
+use mdbutil::{
+    Lsn, config::Config, log, mtr::Mtr, mtr::MtrChain, mtr0types::MtrOperation, ring::RingReader,
+};
 
 fn main() {
     let config = Config::parse();
@@ -14,11 +16,12 @@ fn main() {
     println!("{:#?}", log.header());
     println!("{:#?}", log.checkpoint());
 
+    let mut file_checkpoins_chain = None;
     let mut file_checkpoint_lsn = None;
     let mut reader = log.reader();
     loop {
-        let mtr = match reader.parse_next() {
-            Ok(mtr) => mtr,
+        let chain = match reader.parse_next() {
+            Ok(chain) => chain,
             Err(err) => {
                 // test for EOM.
                 if let Some(err) = err.downcast_ref::<std::io::Error>()
@@ -32,19 +35,34 @@ fn main() {
             }
         };
 
-        if mtr.op == MtrOperation::FileCheckpoint {
-            file_checkpoint_lsn = mtr.file_checkpoint_lsn;
-        }
+        println!(
+            "MTR Chain count={}, len={}, lsn={}",
+            chain.mtr.len(),
+            chain.len,
+            chain.lsn
+        );
 
-        println!("{mtr}");
+        let mut i = 0;
+        for mtr in &chain.mtr {
+            if mtr.op == MtrOperation::FileCheckpoint {
+                file_checkpoins_chain = Some(chain.clone());
+                file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+            }
+
+            i += 1;
+            println!("  {i}: {mtr}");
+        }
     }
 
     println!("Checkpoint LSN/1: {:?}", log.checkpoint().checkpoints[0]);
     println!("Checkpoint LSN/2: {:?}", log.checkpoint().checkpoints[1]);
 
-    let file_checkpoint_lsn =
-        file_checkpoint_lsn.expect("No file checkpoint found in redo log") as Lsn;
-    println!("File checkpoint LSN: {file_checkpoint_lsn}");
+    if let Some(file_checkpoint_lsn) = file_checkpoint_lsn {
+        println!("File checkpoint chain: {file_checkpoins_chain:?}");
+        println!("File checkpoint LSN: {file_checkpoint_lsn}");
+    } else {
+        eprintln!("WARNING: No file checkpoint found in redo log.");
+    }
 
     if log.header().version != log::FORMAT_10_8 {
         eprintln!("WARNING: the redo log is not in 10.8 format.");
@@ -66,6 +84,13 @@ fn main() {
             return;
         }
 
+        if file_checkpoint_lsn.is_none() {
+            eprintln!("No file checkpoint found in redo log, nothing to write.");
+            return;
+        }
+
+        let file_checkpoint_lsn = file_checkpoint_lsn.expect("lsn exists") as Lsn;
+
         let dst = config.srv_log_group_home_dir.join("ib_logfile0.new");
 
         let mut file_checkpoint = vec![];
@@ -76,7 +101,8 @@ fn main() {
         file_checkpoint.push(0x0); // end marker
 
         let mut r0 = RingReader::new(file_checkpoint.as_slice());
-        let mtr = Mtr::parse_next(&mut r0).unwrap();
+        let chain = MtrChain::parse_next(&mut r0).unwrap();
+        let mtr = chain.mtr[0];
 
         let target_lsn = log
             .checkpoint()
@@ -163,8 +189,8 @@ fn main() {
         let mut file_checkpoint_lsn = None;
         let mut reader = target_log.reader();
         loop {
-            let mtr = match reader.parse_next() {
-                Ok(mtr) => mtr,
+            let chain = match reader.parse_next() {
+                Ok(chain) => chain,
                 Err(err) => {
                     // test for EOM.
                     if let Some(err) = err.downcast_ref::<std::io::Error>()
@@ -178,11 +204,13 @@ fn main() {
                 }
             };
 
-            if mtr.op == MtrOperation::FileCheckpoint {
-                file_checkpoint_lsn = mtr.file_checkpoint_lsn;
-            }
+            for mtr in chain.mtr {
+                if mtr.op == MtrOperation::FileCheckpoint {
+                    file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+                }
 
-            println!("{mtr:#?}");
+                println!("{mtr:#?}");
+            }
         }
 
         println!(
