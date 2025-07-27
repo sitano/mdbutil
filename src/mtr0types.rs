@@ -83,23 +83,28 @@ pub enum MtrOperation {
     FileCheckpoint = mfile_type_t::FILE_CHECKPOINT as u8,
 }
 
-impl From<u8> for MtrOperation {
-    fn from(value: u8) -> Self {
+impl TryFrom<u8> for MtrOperation {
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            x if x == mrec_type_t::FREE_PAGE as u8 => MtrOperation::FreePage,
-            x if x == mrec_type_t::INIT_PAGE as u8 => MtrOperation::InitPage,
-            x if x == mrec_type_t::EXTENDED as u8 => MtrOperation::Extended,
-            x if x == mrec_type_t::WRITE as u8 => MtrOperation::Write,
-            x if x == mrec_type_t::MEMSET as u8 => MtrOperation::Memset,
-            x if x == mrec_type_t::MEMMOVE as u8 => MtrOperation::Memmove,
-            x if x == mrec_type_t::RESERVED as u8 => MtrOperation::Reserved,
-            x if x == mrec_type_t::OPTION as u8 => MtrOperation::Option,
-            x if x == mfile_type_t::FILE_CREATE as u8 => MtrOperation::FileCreate,
-            x if x == mfile_type_t::FILE_DELETE as u8 => MtrOperation::FileDelete,
-            x if x == mfile_type_t::FILE_RENAME as u8 => MtrOperation::FileRename,
-            x if x == mfile_type_t::FILE_MODIFY as u8 => MtrOperation::FileModify,
-            x if x == mfile_type_t::FILE_CHECKPOINT as u8 => MtrOperation::FileCheckpoint,
-            _ => panic!("Unknown operation type: {value}"),
+            x if x == MtrOperation::FreePage as u8 => Ok(MtrOperation::FreePage),
+            x if x == MtrOperation::InitPage as u8 => Ok(MtrOperation::InitPage),
+            x if x == MtrOperation::Extended as u8 => Ok(MtrOperation::Extended),
+            x if x == MtrOperation::Write as u8 => Ok(MtrOperation::Write),
+            x if x == MtrOperation::Memset as u8 => Ok(MtrOperation::Memset),
+            x if x == MtrOperation::Memmove as u8 => Ok(MtrOperation::Memmove),
+            x if x == MtrOperation::Reserved as u8 => Ok(MtrOperation::Reserved),
+            x if x == MtrOperation::Option as u8 => Ok(MtrOperation::Option),
+            x if x == MtrOperation::FileCreate as u8 => Ok(MtrOperation::FileCreate),
+            x if x == MtrOperation::FileDelete as u8 => Ok(MtrOperation::FileDelete),
+            x if x == MtrOperation::FileRename as u8 => Ok(MtrOperation::FileRename),
+            x if x == MtrOperation::FileModify as u8 => Ok(MtrOperation::FileModify),
+            x if x == MtrOperation::FileCheckpoint as u8 => Ok(MtrOperation::FileCheckpoint),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid mtr operation type",
+            )),
         }
     }
 }

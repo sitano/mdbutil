@@ -115,17 +115,25 @@ RedoCheckpointCoordinate {
     version: 1349024115,
     start_after_restore: false,
 }
-Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
-Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
-Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
+MTR Chain count=4, len=27, lsn=9691474
+  1: Mtr { space_id: 8, page_no: 76, op: Memset }
+  2: Mtr { space_id: 8, page_no: 76, op: Write }
+  3: Mtr { space_id: 8, page_no: 76, op: Memset }
+  4: Mtr { space_id: 8, page_no: 76, op: Option }
 ...
-Mtr { len: 39, space_id: 0, page_no: 46, op: FileModify }
-Mtr { len: 29, space_id: 4, page_no: 3, op: Write }
-...
-Mtr { len: 27, space_id: 5, page_no: 3, op: Memset }
-Mtr { len: 89, space_id: 3, page_no: 4, op: Write }
+MTR Chain count=13, len=89, lsn=11344877
+  1: Mtr { space_id: 3, page_no: 4, op: Write }
+  2: Mtr { space_id: 3, page_no: 4, op: Write }
+  ...
+  10: Mtr { space_id: 3, page_no: 2, op: Memset }
+  11: Mtr { space_id: 3, page_no: 4, op: Option }
+  12: Mtr { space_id: 3, page_no: 2, op: Option }
+  13: Mtr { space_id: 3, page_no: 0, op: Option }
 Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 6880644, end_lsn: 9694174, checksum: 1144991502 }
 Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 9691474, end_lsn: 10553265, checksum: 2431378773 }
+File checkpoint chain: Some(MtrChain { lsn: 10553265, len: 31, checksum: 2542014928, mtr: [Mtr { space_id: 8, page_no: 0, op: FileModify, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 0, page_no: 0, op: FileCheckpoint, file_checkpoint_lsn: Some(9691474), marker: 0 }, Mtr { space_id: 5411, page_no: 6, op: Option, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 252, page_no: 0, op: FreePage, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 252, page_no: 0, op: Extended, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Memset, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Write, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Memset, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Option, file_checkpoint_lsn: None, marker: 0 }] })
+File checkpoint LSN: 9691474
+WARNING: checkpoint LSN is not at the end of the log.
 ```
 
 to craft fake redo log file checkpoint use `--write`. MariaDB ensures that:

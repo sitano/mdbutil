@@ -12,7 +12,7 @@ use crate::{
     Lsn,
     config::Config,
     mach,
-    mtr::{self, Mtr},
+    mtr::{self, MtrChain},
     ring::{MmapRingWriter, RingReader},
 };
 
@@ -515,8 +515,8 @@ impl<'a> RedoReader<'a> {
         &self.reader
     }
 
-    pub fn parse_next(&mut self) -> anyhow::Result<Mtr> {
-        Mtr::parse_next(&mut self.reader).context("Mtr::parse_next")
+    pub fn parse_next(&mut self) -> anyhow::Result<MtrChain> {
+        MtrChain::parse_next(&mut self.reader).context("Mtr::parse_next")
     }
 }
 
@@ -666,8 +666,8 @@ mod test {
         let mut mtrs = 0usize;
 
         loop {
-            let mtr = match reader.parse_next() {
-                Ok(mtr) => mtr,
+            let chain = match reader.parse_next() {
+                Ok(chain) => chain,
                 Err(err) => {
                     // test for EOM.
                     if let Some(err) = err.downcast_ref::<std::io::Error>()
@@ -680,10 +680,12 @@ mod test {
                 }
             };
 
-            mtrs += 1;
+            mtrs += chain.mtr.len();
 
-            if mtr.op == MtrOperation::FileCheckpoint {
-                file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+            for mtr in chain.mtr {
+                if mtr.op == MtrOperation::FileCheckpoint {
+                    file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+                }
             }
         }
 
