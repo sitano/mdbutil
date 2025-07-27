@@ -1,9 +1,11 @@
+use std::fmt::Display;
 use std::io::{Error, ErrorKind, Result, Write};
 
 use crate::{
     Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
+    mtr0types::MtrOperation,
     mtr0types::mfile_type_t::FILE_CHECKPOINT,
     ring::RingReader,
 };
@@ -23,17 +25,17 @@ pub const TRX_SYS_SPACE: u32 = 0;
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Mtr {
-    /// total mtr length including 1st byte
+    /// total mtr length including 1st byte, termination marker and checksum.
     pub len: u32,
 
     /// tablespace id
     pub space_id: u32,
     pub page_no: u32,
 
-    pub op: u8,
+    pub op: MtrOperation,
 
     // termination marker
-    pub gen_t_marker: u8,
+    pub marker: u8,
     pub checksum: u32,
 
     // payload
@@ -49,9 +51,10 @@ impl Mtr {
 
         let mtr_start = r.clone();
         let lsn = mtr_start.pos() as Lsn;
-        let len = Self::parse_len_byte(r)?;
+        let _ = Self::find_end_marker(r)?;
 
-        let termination_marker_offset = (1 + len) as usize;
+        let termination_marker_offset = r.pos() - mtr_start.pos();
+        // following is equivalent to r.peek_1()?.
         let termination_byte = (&mtr_start + termination_marker_offset).peek_1()?;
         let termination_lsn = lsn + termination_marker_offset as u64;
 
@@ -61,10 +64,8 @@ impl Mtr {
             return Err(Error::from(ErrorKind::NotFound));
         }
 
-        // body length = 1st byte + payload length.
-        // mtr also has 1 byte termination marker,
-        //          and 4 crc32c checksum.
-        let real_crc = mtr_start.crc32c((len + 1) as usize);
+        // |MTR|MTR|...|^TERMINATION_MARKER|CHECKSUM|.
+        let real_crc = mtr_start.crc32c(termination_marker_offset);
         r.advance(1); // past termination marker.
 
         // TODO: encyption, crc iv 8
@@ -79,11 +80,22 @@ impl Mtr {
                      {expected_crc:#x}, real {real_crc:#x}",
                     pos = mtr_start.pos(),
                     pos_hex = mtr_start.pos(),
+                    len = termination_marker_offset + 1 + 4,
                 ),
             ));
         }
 
         // TODO: for parsing loop
+
+        // println!(
+        //     "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum {real_crc:#x}",
+        //     pos = mtr_start.pos(),
+        //     pos_hex = mtr_start.pos(),
+        //     len = termination_marker_offset + 1 + 4,
+        // );
+        // let mut buf = vec![0u8; termination_marker_offset + 1 + 4];
+        // mtr_start.block(buf.as_mut_slice());
+        // println!("mtr: {buf:x?}");
 
         let mut l = mtr_start.clone();
         let recs = l.clone();
@@ -95,8 +107,8 @@ impl Mtr {
         let mut rlen = (b & 0xf) as u32;
         if rlen == 0 {
             let lenlen = mlog_decode_varint_length(l.peek_1()?);
-            // TODO: let addlen = mlog_decode_varint(l.block(lenlen))?;
-            // TODO: rlen = addlen + 15 - lenlen as u32;
+            let addlen = mlog_decode_varint(&mut l)?;
+            rlen = addlen + 15 - lenlen as u32;
             l.advance(lenlen as usize);
         }
 
@@ -136,21 +148,25 @@ impl Mtr {
         // TODO: l+= log_sys.is_encrypted() ? 4U + 8U : 4U;
 
         Ok(Mtr {
-            len,
+            len: termination_marker_offset as u32 + 1 + 4,
             space_id,
             page_no,
-            op: mtr_op,
-            gen_t_marker: termination_byte,
+            op: mtr_op.into(),
+            marker: termination_byte,
             checksum: real_crc,
             file_checkpoint_lsn,
         })
     }
 
-    pub fn parse_len_byte(r: &mut RingReader) -> Result<u32> {
-        let mut total_len = 0u32;
+    /// Looks through the MTR chain end finds the end marker.
+    /// Where the chain is |MTR|MTR|...|^TERMINATION_MARKER|CHECKSUM|.
+    /// Header byte, termination marker and checksum are not included
+    /// in the payload length.
+    pub fn find_end_marker(r: &mut RingReader) -> Result<u32> {
+        let mut payload_len = 0u32;
 
         loop {
-            if total_len >= MTR_SIZE_MAX {
+            if payload_len >= MTR_SIZE_MAX {
                 return Err(Error::from(ErrorKind::NotFound));
             }
 
@@ -161,20 +177,19 @@ impl Mtr {
 
             let mut rlen = (r.read_1()? & 0xf) as u32;
             if rlen == 0 {
-                // unused: rlen = mlog_decode_varint_length(r.peek_1()?) as u32;
                 let addlen = mlog_decode_varint(r.clone())?;
-                if total_len >= MTR_SIZE_MAX {
+                if payload_len >= MTR_SIZE_MAX {
                     return Err(Error::from(ErrorKind::NotFound));
                 }
                 rlen = addlen + 15;
             }
 
-            total_len += rlen;
+            payload_len += rlen;
 
             r.advance(rlen as usize);
         }
 
-        Ok(total_len)
+        Ok(payload_len)
     }
 
     pub fn len(&self) -> u32 {
@@ -207,6 +222,16 @@ impl Mtr {
     }
 }
 
+impl Display for Mtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Mtr {{ len: {}, space_id: {}, page_no: {}, op: {:?} }}",
+            self.len, self.space_id, self.page_no, self.op
+        )
+    }
+}
+
 /// Determine the sequence bit at a log sequence number.
 /// The sequence bit is used to determine whether the log record
 /// corresponds to the current generation (wrap) of the redo log.
@@ -233,7 +258,7 @@ pub fn peek_not_end_marker(r: &mut RingReader) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::Mtr;
-    use crate::{mtr0types::mfile_type_t::FILE_CHECKPOINT, ring::RingReader};
+    use crate::{mtr0types::MtrOperation, ring::RingReader};
 
     #[test]
     fn test_mtr_short_len() {
@@ -247,7 +272,7 @@ mod test {
         let buf = &storage;
         let mut r0 = RingReader::new(buf);
         let mtr = Mtr::parse_next(&mut r0).unwrap();
-        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.len, 16, "len");
     }
 
     #[test]
@@ -262,10 +287,10 @@ mod test {
         let r0 = RingReader::new(buf.as_slice());
         let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
-        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 1);
@@ -288,10 +313,10 @@ mod test {
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
-        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 0);
@@ -315,10 +340,10 @@ mod test {
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         let mtr = Mtr::parse_next(&mut r0.clone()).unwrap();
 
-        assert_eq!(mtr.op, FILE_CHECKPOINT as u8, "op");
+        assert_eq!(mtr.op, MtrOperation::FileCheckpoint, "op");
         assert_eq!(mtr.space_id, 0, "space_id");
         assert_eq!(mtr.page_no, 0, "page_no");
-        assert_eq!(mtr.len, 10, "len");
+        assert_eq!(mtr.len, 16, "len");
         assert_eq!(mtr.file_checkpoint_lsn, Some(lsn), "file_checkpoint_lsn");
 
         assert_eq!(marker, 0);

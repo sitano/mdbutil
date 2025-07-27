@@ -64,16 +64,68 @@ Mtr {
 Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 10474046, end_lsn: 10474046, checksum: 3618321683 }
 Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 10474015, end_lsn: 10474015, checksum: 3405426044 }
 File checkpoint LSN: 10474046
+```
 
-# add 99 rows 1 byte each.
-> INSERT INTO a (t)
-> WITH RECURSIVE fill(n) AS (
->   SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 99) SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 1, 'x') FROM fill;
+or without the checkpoint:
 
-# add 1 row 134 bytes.
+```
+$ scripts/mariadb-install-db --datadir ./data --innodb-log-file-size=10M
+$ bin/mariadbd --datadir ./data --innodb_fast_shutdown=0 --innodb-log-file-size=10M
+
+$ mycli -S /tmp/mysql.sock
+> CREATE TABLE a (id int not null auto_increment primary key, t TEXT);
+> SET max_recursive_iterations = 1000000;
 > INSERT INTO a (t)
-> WITH RECURSIVE fill(n) AS (
->   SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 1) SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 134, 'x') FROM fill;
+  WITH RECURSIVE fill(n) AS (
+    SELECT 1 UNION ALL SELECT n + 1 FROM fill WHERE n < 60500
+  )
+  SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
+$ pkill -9 mariadbd
+$ cargo run -- --log-group-path data
+
+Header block: 12288
+Size: 10485760, Capacity: 10473472
+RedoHeader {
+    version: 1349024115,
+    first_lsn: 12288,
+    creator: "MariaDB 11.6.2",
+    crc: 224651864,
+}
+RedoCheckpointCoordinate {
+    checkpoints: [
+        RedoHeaderCheckpoint {
+            checkpoint_lsn: 6880644,
+            end_lsn: 9694174,
+            checksum: 1144991502,
+        },
+        RedoHeaderCheckpoint {
+            checkpoint_lsn: 9691474,
+            end_lsn: 10553265,
+            checksum: 2431378773,
+        },
+    ],
+    checkpoint_lsn: Some(
+        9691474,
+    ),
+    checkpoint_no: Some(
+        0,
+    ),
+    end_lsn: 10553265,
+    encrypted: false,
+    version: 1349024115,
+    start_after_restore: false,
+}
+Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
+Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
+Mtr { len: 27, space_id: 8, page_no: 76, op: Memset }
+...
+Mtr { len: 39, space_id: 0, page_no: 46, op: FileModify }
+Mtr { len: 29, space_id: 4, page_no: 3, op: Write }
+...
+Mtr { len: 27, space_id: 5, page_no: 3, op: Memset }
+Mtr { len: 89, space_id: 3, page_no: 4, op: Write }
+Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 6880644, end_lsn: 9694174, checksum: 1144991502 }
+Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 9691474, end_lsn: 10553265, checksum: 2431378773 }
 ```
 
 to craft fake redo log file checkpoint use `--write`. MariaDB ensures that:

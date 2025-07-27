@@ -1,9 +1,7 @@
 use std::io::{Seek, Write};
 
 use clap::Parser;
-use mdbutil::{
-    Lsn, config::Config, log, mtr::Mtr, mtr0types::mfile_type_t::FILE_CHECKPOINT, ring::RingReader,
-};
+use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring::RingReader};
 
 fn main() {
     let config = Config::parse();
@@ -34,11 +32,11 @@ fn main() {
             }
         };
 
-        if mtr.op == FILE_CHECKPOINT as u8 {
+        if mtr.op == MtrOperation::FileCheckpoint {
             file_checkpoint_lsn = mtr.file_checkpoint_lsn;
         }
 
-        println!("{mtr:#?}");
+        println!("{mtr}");
     }
 
     println!("Checkpoint LSN/1: {:?}", log.checkpoint().checkpoints[0]);
@@ -180,7 +178,7 @@ fn main() {
                 }
             };
 
-            if mtr.op == FILE_CHECKPOINT as u8 {
+            if mtr.op == MtrOperation::FileCheckpoint {
                 file_checkpoint_lsn = mtr.file_checkpoint_lsn;
             }
 

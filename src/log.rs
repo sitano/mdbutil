@@ -569,7 +569,7 @@ mod test {
     };
 
     use super::*;
-    use crate::{mtr::Mtr, mtr0types::mfile_type_t::FILE_CHECKPOINT};
+    use crate::{mtr::Mtr, mtr0types::MtrOperation};
 
     #[test]
     fn test_build_header_10_8() {
@@ -682,7 +682,7 @@ mod test {
 
             mtrs += 1;
 
-            if mtr.op == FILE_CHECKPOINT as u8 {
+            if mtr.op == MtrOperation::FileCheckpoint {
                 file_checkpoint_lsn = mtr.file_checkpoint_lsn;
             }
         }

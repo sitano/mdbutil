@@ -64,3 +64,42 @@ pub enum mfile_type_t {
     When all bytes are NUL, this is a dummy padding record. */
     FILE_CHECKPOINT = 0xf0,
 }
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtrOperation {
+    FreePage = mrec_type_t::FREE_PAGE as u8,
+    InitPage = mrec_type_t::INIT_PAGE as u8,
+    Extended = mrec_type_t::EXTENDED as u8,
+    Write = mrec_type_t::WRITE as u8,
+    Memset = mrec_type_t::MEMSET as u8,
+    Memmove = mrec_type_t::MEMMOVE as u8,
+    Reserved = mrec_type_t::RESERVED as u8,
+    Option = mrec_type_t::OPTION as u8,
+    FileCreate = mfile_type_t::FILE_CREATE as u8,
+    FileDelete = mfile_type_t::FILE_DELETE as u8,
+    FileRename = mfile_type_t::FILE_RENAME as u8,
+    FileModify = mfile_type_t::FILE_MODIFY as u8,
+    FileCheckpoint = mfile_type_t::FILE_CHECKPOINT as u8,
+}
+
+impl From<u8> for MtrOperation {
+    fn from(value: u8) -> Self {
+        match value {
+            x if x == mrec_type_t::FREE_PAGE as u8 => MtrOperation::FreePage,
+            x if x == mrec_type_t::INIT_PAGE as u8 => MtrOperation::InitPage,
+            x if x == mrec_type_t::EXTENDED as u8 => MtrOperation::Extended,
+            x if x == mrec_type_t::WRITE as u8 => MtrOperation::Write,
+            x if x == mrec_type_t::MEMSET as u8 => MtrOperation::Memset,
+            x if x == mrec_type_t::MEMMOVE as u8 => MtrOperation::Memmove,
+            x if x == mrec_type_t::RESERVED as u8 => MtrOperation::Reserved,
+            x if x == mrec_type_t::OPTION as u8 => MtrOperation::Option,
+            x if x == mfile_type_t::FILE_CREATE as u8 => MtrOperation::FileCreate,
+            x if x == mfile_type_t::FILE_DELETE as u8 => MtrOperation::FileDelete,
+            x if x == mfile_type_t::FILE_RENAME as u8 => MtrOperation::FileRename,
+            x if x == mfile_type_t::FILE_MODIFY as u8 => MtrOperation::FileModify,
+            x if x == mfile_type_t::FILE_CHECKPOINT as u8 => MtrOperation::FileCheckpoint,
+            _ => panic!("Unknown operation type: {value}"),
+        }
+    }
+}
