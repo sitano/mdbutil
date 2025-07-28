@@ -4,6 +4,12 @@ version = "0.1.0"
 rust-version = "1.88"
 edition = "2024"
 
+[profile.fuzz]
+inherits = "dev"
+opt-level = 3
+incremental = false
+codegen-units = 1
+
 [dependencies]
 anyhow = "1"
 byteorder = "1"
@@ -12,4 +18,10 @@ crc32c = "0.6"
 mmap-rs = "0.6"
 
 [dev-dependencies]
+bolero = "0.13"
 tempfile = "3"
+
+[[test]]
+name = "mtr_parse_next_test"
+harness = false
+

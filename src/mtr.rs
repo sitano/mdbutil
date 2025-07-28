@@ -2,13 +2,13 @@ use std::fmt::Display;
 use std::io::{Error, ErrorKind, Result, Write};
 
 use crate::{
+    Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
+    mtr0types::MtrOperation,
     mtr0types::mfile_type_t::FILE_CHECKPOINT,
     mtr0types::mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
-    mtr0types::MtrOperation,
     ring::RingReader,
-    Lsn,
 };
 
 /// MTR termination marker.
@@ -70,7 +70,7 @@ impl MtrChain {
         }
 
         // |MTR|MTR|...|^TERMINATION_MARKER|CHECKSUM|.
-        let real_crc = mtr_start.crc32c(termination_marker_offset);
+        let real_crc = mtr_start.crc32c(termination_marker_offset)?;
         r.advance(1); // past termination marker.
 
         // TODO: encyption, crc iv 8
@@ -293,7 +293,10 @@ impl MtrChain {
 
             payload_len += rlen;
 
-            r.advance(rlen as usize);
+            if !r.advance(rlen as usize) {
+                // if ring buffer pos overflow is not supported we don't want it.
+                return Err(Error::from(ErrorKind::NotFound));
+            }
         }
 
         Ok(payload_len)

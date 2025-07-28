@@ -37,7 +37,11 @@ impl<'a> RingReader<'a> {
         pos_to_offset(self.header, self.buf.len() - self.header, pos)
     }
 
-    pub fn block(&self, buf: &mut [u8]) {
+    pub fn block(&self, mut buf: &mut [u8]) -> usize {
+        if buf.len() > self.buf.len() {
+            buf = &mut buf[..self.buf.len()];
+        }
+
         let start = self.pos_to_offset(self.pos);
         let end = self.pos_to_offset(self.pos + buf.len());
         if start < end {
@@ -47,12 +51,16 @@ impl<'a> RingReader<'a> {
             buf[..size1].copy_from_slice(&self.buf[start..]);
             buf[size1..].copy_from_slice(&self.buf[self.header..end]);
         }
+
+        buf.len()
     }
 
-    pub fn crc32c(&self, size: usize) -> u32 {
+    pub fn crc32c(&self, size: usize) -> Result<u32> {
         let mut buf = vec![0u8; size];
-        self.block(&mut buf);
-        crc32c(&buf)
+        if self.block(&mut buf) != size {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+        Ok(crc32c(&buf))
     }
 
     pub fn pos(&self) -> usize {
@@ -80,11 +88,21 @@ impl<'a> RingReader<'a> {
             return Err(Error::from(ErrorKind::UnexpectedEof));
         }
 
+        if self.pos.checked_add(t).is_none() {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+
         Ok(())
     }
 
-    pub fn advance(&mut self, bytes: usize) {
-        self.pos += bytes;
+    pub fn advance(&mut self, bytes: usize) -> bool {
+        // TODO: overflowing u64 pos.
+        if let Some(new_pos) = self.pos.checked_add(bytes) {
+            self.pos = new_pos;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn peek_1(&self) -> Result<u8> {
