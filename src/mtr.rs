@@ -2,13 +2,13 @@ use std::fmt::Display;
 use std::io::{Error, ErrorKind, Result, Write};
 
 use crate::{
-    Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
-    mtr0types::MtrOperation,
     mtr0types::mfile_type_t::FILE_CHECKPOINT,
     mtr0types::mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
+    mtr0types::MtrOperation,
     ring::RingReader,
+    Lsn,
 };
 
 /// MTR termination marker.
@@ -144,8 +144,7 @@ impl MtrChain {
             if rlen == 0 {
                 let lenlen = mlog_decode_varint_length(l.peek_1()?);
                 let addlen = mlog_decode_varint(&mut l)?;
-                rlen = addlen + 15 - lenlen as u32 - 4;
-                l.advance(lenlen as usize);
+                rlen = addlen + 15 - lenlen as u32;
             }
 
             // println!(
@@ -226,10 +225,36 @@ impl MtrChain {
                 todo!("malformed");
             }
 
+            let op = match MtrOperation::try_from(mtr_op)
+                .map_err(|_| Error::from(ErrorKind::InvalidData))
+            {
+                Ok(op) => op,
+                Err(_) => {
+                    eprintln!(
+                        "InnoDB: Ignoring malformed log record at LSN {}: invalid mtr op {}. Probably the log is corrupted.",
+                        l.pos(),
+                        mtr_op
+                    );
+
+                    if l.pos() >= mtr_start.pos() + chain.len() as usize {
+                        eprintln!(
+                            "InnoDB: We are behind the end of the MTR chain at LSN {} >= {}+{}. Stopping here.",
+                            l.pos(),
+                            mtr_start.pos(),
+                            chain.len()
+                        );
+
+                        break;
+                    }
+
+                    continue;
+                }
+            };
+
             chain.mtr.push(Mtr {
                 space_id,
                 page_no,
-                op: MtrOperation::try_from(mtr_op)?,
+                op,
                 file_checkpoint_lsn,
                 marker: termination_byte,
             });
@@ -488,5 +513,42 @@ mod test {
 
         let r0 = RingReader::buf_at(buf.as_slice(), hdr_size as usize, lsn as usize);
         assert!(MtrChain::parse_next(&mut r0.clone()).is_err());
+    }
+
+    #[test]
+    fn test_parse_mtr_chain() {
+        let buf = vec![
+            // MTR Chain count=2, len=123, lsn=163
+            //   1: Mtr { space_id: 3, page_no: 45, op: Extended }
+            //   2: Mtr { space_id: 3, page_no: 45, op: Option }
+            0x20, 0x5e, 0x3, 0x2d, 0x3, 0xd, 0x3, 0xf, 0x20, 0x0, 0x0, 0x0, 0x0, 0x17, 0xc6, 0x0,
+            0x0, 0x0, 0x2d, 0x1, 0x78, 0x4, 0x74, 0x65, 0x73, 0x74, 0x1, 0x61, 0x7, 0x50, 0x52,
+            0x49, 0x4d, 0x41, 0x52, 0x59, 0xc, 0x6e, 0x5f, 0x64, 0x69, 0x66, 0x66, 0x5f, 0x70,
+            0x66, 0x78, 0x30, 0x31, 0x3, 0x6, 0x4, 0x68, 0x84, 0xa2, 0x89, 0x7, 0x8, 0x0, 0x0, 0x0,
+            0x0, 0x0, 0x0, 0x0, 0x6, 0x8, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x22,
+            0x0, 0x4, 0x74, 0x65, 0x73, 0x74, 0x1, 0x1, 0x61, 0x2, 0x7, 0x50, 0x52, 0x49, 0x4d,
+            0x41, 0x52, 0x59, 0x3, 0xc, 0x6e, 0x5f, 0x64, 0x69, 0x66, 0x66, 0x5f, 0x70, 0x66, 0x78,
+            0x30, 0x31, 0x77, 0x3, 0x2d, 0x0, 0x80, 0x89, 0x7e, 0x61, 0x0, 0xa8, 0xf3, 0xd8, 0x55,
+            // MTR Chain count=1, len=39, lsn=286
+            //   1: Mtr { space_id: 0, page_no: 0, op: FileModify }
+            0xb0, 0x12, 0x4, 0x0, 0x2e, 0x2f, 0x6d, 0x79, 0x73, 0x71, 0x6c, 0x2f, 0x69, 0x6e, 0x6e,
+            0x6f, 0x64, 0x62, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x73, 0x74, 0x61, 0x74,
+            0x73, 0x2e, 0x69, 0x62, 0x64, 0x0, 0xff, 0x42, 0xf0, 0x81,
+            // Termination marker.
+            0x00,
+        ];
+
+        let mut r0 = RingReader::buf_at(buf.as_slice(), 0, buf.len());
+        let chain = MtrChain::parse_next(&mut r0).unwrap();
+        // println!("Parsed MTR chain: {chain:?}");
+
+        assert_eq!(chain.len(), 123, "chain len in bytes");
+        assert_eq!(chain.mtr.len(), 2, "chain mtr count");
+
+        let chain = MtrChain::parse_next(&mut r0).unwrap();
+        // println!("Parsed MTR chain: {chain:?}");
+
+        assert_eq!(chain.len(), 39, "chain len in bytes");
+        assert_eq!(chain.mtr.len(), 1, "chain mtr count");
     }
 }

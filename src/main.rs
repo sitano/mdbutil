@@ -30,7 +30,7 @@ fn main() {
                     break;
                 }
 
-                eprintln!("\nERROR: {err:?}");
+                eprintln!("ERROR: {err}: {:?}", err.source());
                 break;
             }
         };
