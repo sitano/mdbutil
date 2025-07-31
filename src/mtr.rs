@@ -1,18 +1,19 @@
 use std::{
+    cmp::min,
     fmt::Display,
     io::{Error, ErrorKind, Result, Write},
 };
 
 use crate::{
-    Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
     mtr0types::{
-        MtrOperation,
         mfile_type_t::FILE_CHECKPOINT,
         mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
+        MtrOperation,
     },
     ring::RingReader,
+    Lsn,
 };
 
 /// MTR termination marker.
@@ -26,6 +27,12 @@ pub const MTR_SIZE_MAX: u32 = 1u32 << 20;
 
 /// Space id of the transaction system page (the system tablespace).
 pub const TRX_SYS_SPACE: u32 = 0;
+
+/// Maximum Page Size Shift (power of 2).
+pub const UNIV_PAGE_SIZE_SHIFT_MAX: u32 = 16;
+
+/// Maximum page size InnoDB currently supports.
+pub const UNIV_PAGE_SIZE_MAX: u32 = 1u32 << UNIV_PAGE_SIZE_SHIFT_MAX;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,20 +231,52 @@ impl MtrChain {
                 mtr_op = b & 0xf0;
 
                 if mtr_op == FILE_CHECKPOINT as u8 {
+                    // l[rlen] is l + rlen == termination marker:
+                    // this condition means we do not expect anything else in the chain,
+                    // or file checkpoint is the last record in the chain.
+                    if space_id != 0 || page_no != 0 || l[rlen] > 1 {
+                        Self::eprintln_malformed(
+                            &mtr_start,
+                            &recs,
+                            &l,
+                            b,
+                            rlen,
+                            termination_lsn as Lsn,
+                        );
+
+                        continue;
+                    } else if rlen != 8 {
+                        if rlen < UNIV_PAGE_SIZE_MAX && !l.zero(rlen as usize) {
+                            continue;
+                        }
+
+                        Self::eprintln_malformed(
+                            &mtr_start,
+                            &recs,
+                            &l,
+                            b,
+                            rlen,
+                            termination_lsn as Lsn,
+                        );
+
+                        continue;
+                    }
+
                     let lsn = l.read_8()? as Lsn;
                     rlen -= 8;
 
+                    if lsn == 0 {
+                        continue;
+                    }
+
+                    // TODO: rules for the log parser to accept that is that this MTR LSN ==
+                    // checkpoint_lsn. add lsn start and len to MTR entry.
                     file_checkpoint_lsn = Some(lsn);
                 }
             } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
                 // nothing
             } else {
-                eprintln!(
-                    "InnoDB: Ignoring malformed log record at LSN {} (chain at {}) (mtr at {})",
-                    l.pos(),
-                    mtr_start.pos(),
-                    recs.pos(),
-                );
+                Self::eprintln_malformed(&mtr_start, &recs, &l, b, rlen, termination_lsn as Lsn);
 
                 continue;
             }
@@ -319,6 +358,28 @@ impl MtrChain {
         }
 
         Ok(payload_len)
+    }
+
+    pub fn eprintln_malformed(
+        chain: &RingReader,
+        mtr: &RingReader,
+        cur: &RingReader,
+        header: u8,
+        rlen: u32,
+        chain_end_lsn: Lsn,
+    ) {
+        eprintln!(
+            "InnoDB: Ignoring malformed log record at LSN {} (chain at {}) (mtr at {}), header: {}",
+            cur.pos(),
+            chain.pos(),
+            mtr.pos(),
+            header
+        );
+
+        let size = min(1 + rlen, chain_end_lsn as u32 - mtr.pos() as u32) as usize;
+        let mut buf = vec![0u8; size];
+        mtr.block(buf.as_mut_slice());
+        eprintln!("InnoDB: malformed mtr: {buf:x?}");
     }
 
     pub fn len(&self) -> u32 {

@@ -2,6 +2,7 @@ use std::{
     cmp::min,
     io::{Error, ErrorKind, Read, Result, Seek, Write},
     ops::Add,
+    ops::Index,
 };
 
 use crc32c::crc32c;
@@ -137,6 +138,13 @@ impl<'a> RingReader<'a> {
 
         Ok(mach::mach_read_from_8(&buf))
     }
+
+    pub fn zero(&self, size: usize) -> bool {
+        // memory copy is not efficient here, but ok.
+        let mut buf = vec![0u8; size];
+        self.block(&mut buf);
+        buf.iter().all(|&b| b == 0)
+    }
 }
 
 impl<'a> Read for RingReader<'a> {
@@ -160,6 +168,14 @@ impl<'a> Read for RingReader<'a> {
     }
 }
 
+impl<'a> Add<u32> for &RingReader<'a> {
+    type Output = RingReader<'a>;
+
+    fn add(self, bytes: u32) -> Self::Output {
+        self + bytes as usize
+    }
+}
+
 impl<'a> Add<usize> for &RingReader<'a> {
     type Output = RingReader<'a>;
 
@@ -167,6 +183,28 @@ impl<'a> Add<usize> for &RingReader<'a> {
         let mut new_reader = self.clone();
         new_reader.advance(bytes);
         new_reader
+    }
+}
+
+impl<'a> Index<u32> for RingReader<'a> {
+    type Output = u8;
+
+    fn index(&self, index: u32) -> &Self::Output {
+        self.index(index as usize)
+    }
+}
+
+impl<'a> Index<usize> for RingReader<'a> {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        // TODO: use peek_1()
+        // TODO: overflowing u64 pos.
+        let Some(pos) = self.pos.checked_add(index) else {
+            todo!("overflowing index access in RingReader");
+        };
+        let offset = self.pos_to_offset(pos);
+        &self.buf[offset]
     }
 }
 
