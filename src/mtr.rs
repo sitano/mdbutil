@@ -77,7 +77,7 @@ impl MtrChain {
         let real_crc = mtr_start.crc32c(termination_marker_offset)?;
         r.advance(1); // past termination marker.
 
-        // TODO: encyption, crc iv 8
+        // TODO: encryption, crc iv 8
 
         let expected_crc = r.read_4()?; // read block crc.
 

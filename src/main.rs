@@ -23,7 +23,7 @@ fn main() {
     println!("{:#?}", log.header());
     println!("{:#?}", log.checkpoint());
 
-    let mut file_checkpoins_chain = None;
+    let mut file_checkpoint_chain = None;
     let mut file_checkpoint_lsn = None;
     let mut reader = log.reader();
     loop {
@@ -52,7 +52,7 @@ fn main() {
         let mut i = 0;
         for mtr in &chain.mtr {
             if mtr.op == MtrOperation::FileCheckpoint {
-                file_checkpoins_chain = Some(chain.clone());
+                file_checkpoint_chain = Some(chain.clone());
                 file_checkpoint_lsn = mtr.file_checkpoint_lsn;
             }
 
@@ -65,7 +65,7 @@ fn main() {
     println!("Checkpoint LSN/2: {:?}", log.checkpoint().checkpoints[1]);
 
     if let Some(file_checkpoint_lsn) = file_checkpoint_lsn {
-        println!("File checkpoint chain: {file_checkpoins_chain:?}");
+        println!("File checkpoint chain: {file_checkpoint_chain:?}");
         println!("File checkpoint LSN: {file_checkpoint_lsn}");
     } else {
         eprintln!("WARNING: No file checkpoint found in redo log.");
