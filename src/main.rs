@@ -2,7 +2,12 @@ use std::io::{Seek, Write};
 
 use clap::Parser;
 use mdbutil::{
-    Lsn, config::Config, log, mtr::Mtr, mtr::MtrChain, mtr0types::MtrOperation, ring::RingReader,
+    Lsn,
+    config::Config,
+    log,
+    mtr::{Mtr, MtrChain},
+    mtr0types::MtrOperation,
+    ring::RingReader,
 };
 
 fn main() {

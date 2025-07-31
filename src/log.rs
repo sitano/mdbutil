@@ -131,7 +131,7 @@ pub struct RedoHeaderCheckpoint {
 }
 
 impl Redo {
-    pub fn open(log_file_path: &PathBuf) -> anyhow::Result<Redo> {
+    pub fn open(log_file_path: &Path) -> anyhow::Result<Redo> {
         let log_file = std::fs::File::open(log_file_path)
             .with_context(|| format!("open log file at {}", log_file_path.display()))?;
         let log_meta = log_file.metadata().context("get metadata for log a file")?;
@@ -654,7 +654,7 @@ mod test {
     }
 
     fn parse_redo_log_file(path: &Path, lsn: Lsn) -> anyhow::Result<()> {
-        let log = Redo::open(&path.to_path_buf())?;
+        let log = Redo::open(path)?;
 
         assert_eq!(log.hdr.first_lsn, FIRST_LSN);
         assert!(!log.checkpoint.encrypted);

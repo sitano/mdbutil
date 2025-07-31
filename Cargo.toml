@@ -1,14 +1,14 @@
 [package]
-name = "mdbutil"
-version = "0.1.0"
-rust-version = "1.88"
 edition = "2024"
+name = "mdbutil"
+rust-version = "1.88"
+version = "0.1.0"
 
 [profile.fuzz]
+codegen-units = 1
+incremental = false
 inherits = "dev"
 opt-level = 3
-incremental = false
-codegen-units = 1
 
 [dependencies]
 anyhow = "1"
@@ -22,6 +22,9 @@ bolero = "0.13"
 tempfile = "3"
 
 [[test]]
-name = "mtr_parse_next_test"
 harness = false
+name = "mtr_parse_next_test"
 
+[[test]]
+harness = false
+name = "file_checkpoint_test"

@@ -1,13 +1,17 @@
-use std::fmt::Display;
-use std::io::{Error, ErrorKind, Result, Write};
+use std::{
+    fmt::Display,
+    io::{Error, ErrorKind, Result, Write},
+};
 
 use crate::{
     Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
-    mtr0types::MtrOperation,
-    mtr0types::mfile_type_t::FILE_CHECKPOINT,
-    mtr0types::mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
+    mtr0types::{
+        MtrOperation,
+        mfile_type_t::FILE_CHECKPOINT,
+        mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
+    },
     ring::RingReader,
 };
 
@@ -160,7 +164,8 @@ impl MtrChain {
                 space_id = mlog_decode_varint(&mut l)?;
                 if rlen < space_id_len as u32 {
                     eprintln!(
-                        "InnoDB: Ignoring malformed log record at LSN {}: space_id_len {} < rlen {}",
+                        "InnoDB: Ignoring malformed log record at LSN {}: space_id_len {} < rlen \
+                         {}",
                         l.pos(),
                         space_id_len,
                         rlen
@@ -231,14 +236,16 @@ impl MtrChain {
                 Ok(op) => op,
                 Err(_) => {
                     eprintln!(
-                        "InnoDB: Ignoring malformed log record at LSN {}: invalid mtr op {}. Probably the log is corrupted.",
+                        "InnoDB: Ignoring malformed log record at LSN {}: invalid mtr op {}. \
+                         Probably the log is corrupted.",
                         l.pos(),
                         mtr_op
                     );
 
                     if l.pos() >= mtr_start.pos() + chain.len() as usize {
                         eprintln!(
-                            "InnoDB: We are behind the end of the MTR chain at LSN {} >= {}+{}. Stopping here.",
+                            "InnoDB: We are behind the end of the MTR chain at LSN {} >= {}+{}. \
+                             Stopping here.",
                             l.pos(),
                             mtr_start.pos(),
                             chain.len()
@@ -314,6 +321,21 @@ impl Mtr {
         capacity: u64,
         lsn: Lsn,
     ) -> Result<()> {
+        if lsn < header {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "LSN must be greater than or equal to the header size",
+            ));
+        }
+
+        // 16 bytes is the record + 0x00 is the last termination marker.
+        if lsn >= u64::MAX - 16 {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "LSN is too large to fit in a file checkpoint",
+            ));
+        }
+
         // 0xfa is FILE_CHECKPOINT + 10b + 1b termination marker + 4b checksum)
         let mut temp = [0u8; 1 + 10 + 1 + 4];
         let mut cursor = std::io::Cursor::new(temp.as_mut_slice());
