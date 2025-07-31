@@ -100,6 +100,9 @@ impl MtrChain {
         //     pos_hex = mtr_start.pos(),
         //     len = termination_marker_offset + 1 + 4,
         // );
+        // let mut buf = vec![0u8; termination_marker_offset + 1 + 4 + 16];
+        // mtr_start.block(buf.as_mut_slice());
+        // println!("mtr: {buf:x?}");
 
         // Parse MTR chain.
         let mut chain = MtrChain {
@@ -118,14 +121,10 @@ impl MtrChain {
 
         loop {
             // println!(
-            //     "mtr at pos={pos} (0x{pos_hex:x}) len={len} checksum {real_crc:#x}",
-            //     pos = mtr_start.pos(),
-            //     pos_hex = mtr_start.pos(),
-            //     len = termination_marker_offset + 1 + 4,
+            //     "looking at mtr at pos={pos} (0x{pos_hex:x}), max lsn = {termination_lsn}",
+            //     pos = l.pos(),
+            //     pos_hex = l.pos(),
             // );
-            // let mut buf = vec![0u8; termination_marker_offset + 1 + 4];
-            // mtr_start.block(buf.as_mut_slice());
-            // println!("mtr: {buf:x?}");
 
             let recs = l.clone();
             l.advance(1);
@@ -152,10 +151,14 @@ impl MtrChain {
             }
 
             // println!(
-            //     "rlen: {rlen}, b = {b:#x}, op = {op2:?}, lsn = {:x}, pos = {:x}",
-            //     l.pos(),
-            //     l.pos_to_offset(l.pos())
+            //     "mtr lsn start = {start}, lsn end = {end}, len: {rlen}, b = {b:#x}, pos = 0x{pos:x}",
+            //     start = l.pos() - 1,
+            //     end = l.pos() + rlen as usize, // mtr length = 1 byte header + payload size (rlen).
+            //     pos = l.pos_to_offset(l.pos() - 1),
             // );
+            // let mut buf = vec![0u8; termination_marker_offset + 1 + 4];
+            // mtr_start.block(buf.as_mut_slice());
+            // println!("mtr: {buf:x?}");
 
             // If MTR is not a page op over the same page read the space id and page no.
             // not ((b & 0x80 != 0) && got_page_op)
@@ -222,12 +225,21 @@ impl MtrChain {
 
                 if mtr_op == FILE_CHECKPOINT as u8 {
                     let lsn = l.read_8()? as Lsn;
+                    rlen -= 8;
+
                     file_checkpoint_lsn = Some(lsn);
                 }
             } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
                 // nothing
             } else {
-                todo!("malformed");
+                eprintln!(
+                    "InnoDB: Ignoring malformed log record at LSN {} (chain at {}) (mtr at {})",
+                    l.pos(),
+                    mtr_start.pos(),
+                    recs.pos(),
+                );
+
+                continue;
             }
 
             let op = match MtrOperation::try_from(mtr_op)
@@ -401,6 +413,8 @@ pub fn peek_not_end_marker(r: &RingReader) -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std::io::{Error, ErrorKind};
+
     use super::{Mtr, MtrChain};
     use crate::{mtr0types::MtrOperation, ring::RingReader};
 
@@ -575,5 +589,37 @@ mod test {
 
         assert_eq!(chain.len(), 39, "chain len in bytes");
         assert_eq!(chain.mtr.len(), 1, "chain mtr count");
+    }
+
+    // Case when we didn't deduct 8 bytes from rlen after reading the file checkpoint LSN.
+    #[test]
+    fn test_parse_checkpoint_malformed() {
+        let buf = vec![
+            0xfa, // FILE_CHECKPOINT + len 10 bytes (+1 1st byte + 1 termination marker)
+            0x00, 0x00, // tablespace id + page no
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xde, 0x3d, // checkpoint LSN
+            0x01, // marker
+            0x1f, 0xa3, 0x52, 0x97, // checksum
+            0x00, 0x00, 0x29, 0xd3, // 8 bytes of forgot rlen
+            0x51, // unexisting command
+        ];
+
+        let mut r0 = RingReader::new(buf.as_slice());
+        let _mtr = MtrChain::parse_next(&mut r0).unwrap();
+        // println!("Parsed MTR chain: {chain:?}");
+
+        let not_found = MtrChain::parse_next(&mut r0);
+        let expected = Error::from(ErrorKind::NotFound);
+
+        assert!(
+            not_found.is_err(),
+            "We should not get Ok result: {not_found:?}"
+        );
+
+        let err = not_found.unwrap_err();
+        assert!(
+            err.kind() == expected.kind(),
+            "There is only 1 MTR in the chain, so we should not get NotFound error: {err:?}"
+        );
     }
 }

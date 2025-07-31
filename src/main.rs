@@ -12,7 +12,9 @@ use mdbutil::{
 
 fn main() {
     let config = Config::parse();
-    let log_file_path = config.get_log_file_path();
+    let log_file_path = config
+        .get_log_file_path()
+        .expect("Redo log file path not specified");
     let log = log::Redo::open(&log_file_path).expect("Failed to open redo log");
 
     println!("Header block: {}", log.header().first_lsn);
@@ -96,7 +98,10 @@ fn main() {
 
         let file_checkpoint_lsn = file_checkpoint_lsn.expect("lsn exists") as Lsn;
 
-        let dst = config.srv_log_group_home_dir.join("ib_logfile0.new");
+        let dst = config
+            .get_log_file_dir()
+            .expect("parent directory should exist")
+            .join("ib_logfile0.new");
 
         let mut file_checkpoint = vec![];
         let header = log.header().first_lsn;
