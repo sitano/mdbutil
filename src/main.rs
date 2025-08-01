@@ -26,6 +26,7 @@ fn main() {
     let mut file_checkpoint_chain = None;
     let mut file_checkpoint_lsn = None;
     let mut reader = log.reader();
+    let mut chains = 0usize;
     loop {
         let chain = match reader.parse_next() {
             Ok(chain) => chain,
@@ -42,8 +43,10 @@ fn main() {
             }
         };
 
+        chains += 1;
         println!(
-            "MTR Chain count={}, len={}, lsn={}",
+            "{}: MTR Chain count={}, len={}, lsn={}",
+            chains,
             chain.mtr.len(),
             chain.len,
             chain.lsn
@@ -51,13 +54,21 @@ fn main() {
 
         let mut i = 0;
         for mtr in &chain.mtr {
-            if mtr.op == MtrOperation::FileCheckpoint {
+            if mtr.op == MtrOperation::FileCheckpoint
+                && Some(mtr.lsn) == log.checkpoint().checkpoint_lsn
+            {
                 file_checkpoint_chain = Some(chain.clone());
                 file_checkpoint_lsn = mtr.file_checkpoint_lsn;
             }
 
             i += 1;
-            println!("  {i}: {mtr}");
+            println!(
+                "  {i}: [{start}..{end}) {mtr}",
+                start = reader.reader().pos_to_offset(mtr.lsn as usize),
+                end = reader
+                    .reader()
+                    .pos_to_offset(mtr.lsn as usize + mtr.len as usize),
+            );
         }
     }
 
@@ -215,11 +226,19 @@ fn main() {
             };
 
             for mtr in chain.mtr {
-                if mtr.op == MtrOperation::FileCheckpoint {
+                if mtr.op == MtrOperation::FileCheckpoint
+                    && Some(mtr.lsn) == target_log.checkpoint().checkpoint_lsn
+                {
                     file_checkpoint_lsn = mtr.file_checkpoint_lsn;
                 }
 
-                println!("{mtr:#?}");
+                println!(
+                    "  [{start}..{end}) {mtr}",
+                    start = reader.reader().pos_to_offset(mtr.lsn as usize),
+                    end = reader
+                        .reader()
+                        .pos_to_offset(mtr.lsn as usize + mtr.len as usize),
+                );
             }
         }
 

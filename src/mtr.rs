@@ -5,15 +5,15 @@ use std::{
 };
 
 use crate::{
+    Lsn,
     mach::{mach_write_to_4, mach_write_to_8},
     mtr0log::{mlog_decode_varint, mlog_decode_varint_length},
     mtr0types::{
+        MtrOperation,
         mfile_type_t::FILE_CHECKPOINT,
         mrec_type_t::{INIT_PAGE, MEMSET, RESERVED},
-        MtrOperation,
     },
     ring::RingReader,
-    Lsn,
 };
 
 /// MTR termination marker.
@@ -40,6 +40,8 @@ pub struct MtrChain {
     pub lsn: Lsn,
     /// total mtr length including 1st byte, termination marker and checksum.
     pub len: u32,
+    // termination marker
+    pub marker: u8,
     pub checksum: u32,
     pub mtr: Vec<Mtr>,
 }
@@ -47,6 +49,10 @@ pub struct MtrChain {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mtr {
+    // coordinates
+    pub lsn: Lsn,
+    pub len: u32,
+
     /// tablespace id
     pub space_id: u32,
     pub page_no: u32,
@@ -55,9 +61,6 @@ pub struct Mtr {
 
     // FILE_CHECKPOINT LSN, if any.
     pub file_checkpoint_lsn: Option<Lsn>,
-
-    // termination marker
-    pub marker: u8,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -115,6 +118,7 @@ impl MtrChain {
         let mut chain = MtrChain {
             lsn,
             len: termination_marker_offset as u32 + 1 + 4,
+            marker: termination_byte,
             checksum: real_crc,
             mtr: Vec::new(),
         };
@@ -156,6 +160,7 @@ impl MtrChain {
                 let addlen = mlog_decode_varint(&mut l)?;
                 rlen = addlen + 15 - lenlen as u32;
             }
+            let mtr_len = 1 + rlen; // 1 byte header + payload size (rlen).
 
             // println!(
             //     "mtr lsn start = {start}, lsn end = {end}, len: {rlen}, b = {b:#x}, pos = 0x{pos:x}",
@@ -269,14 +274,15 @@ impl MtrChain {
                         continue;
                     }
 
-                    // TODO: rules for the log parser to accept that is that this MTR LSN ==
-                    // checkpoint_lsn. add lsn start and len to MTR entry.
+                    // Rules for the log parser to accept FILE_CHECKPOINT are:
+                    // - MTR LSN == log_sys.next_checkpoint_lsn,
+                    // - no other file_checkpoint is selected yet.
                     file_checkpoint_lsn = Some(lsn);
                 }
             } else if b == FILE_CHECKPOINT as u8 + 2 && space_id == 0 && page_no == 0 {
                 // nothing
             } else {
-                Self::eprintln_malformed(&mtr_start, &recs, &l, b, rlen, termination_lsn as Lsn);
+                Self::eprintln_malformed(&mtr_start, &recs, &l, b, mtr_len, termination_lsn as Lsn);
 
                 continue;
             }
@@ -310,11 +316,12 @@ impl MtrChain {
             };
 
             chain.mtr.push(Mtr {
+                lsn: recs.pos() as Lsn,
+                len: mtr_len,
                 space_id,
                 page_no,
                 op,
                 file_checkpoint_lsn,
-                marker: termination_byte,
             });
 
             l.advance(rlen as usize);
@@ -365,7 +372,7 @@ impl MtrChain {
         mtr: &RingReader,
         cur: &RingReader,
         header: u8,
-        rlen: u32,
+        mtr_len: u32,
         chain_end_lsn: Lsn,
     ) {
         eprintln!(
@@ -376,7 +383,7 @@ impl MtrChain {
             header
         );
 
-        let size = min(1 + rlen, chain_end_lsn as u32 - mtr.pos() as u32) as usize;
+        let size = min(mtr_len, chain_end_lsn as u32 - mtr.pos() as u32) as usize;
         let mut buf = vec![0u8; size];
         mtr.block(buf.as_mut_slice());
         eprintln!("InnoDB: malformed mtr: {buf:x?}");
@@ -443,8 +450,8 @@ impl Display for Mtr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Mtr {{ space_id: {}, page_no: {}, op: {:?} }}",
-            self.space_id, self.page_no, self.op
+            "Mtr {{ space_id: {}, page_no: {}, op: {:?} }} at ({}+{})",
+            self.space_id, self.page_no, self.op, self.lsn, self.len
         )
     }
 }
