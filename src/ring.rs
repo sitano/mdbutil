@@ -346,6 +346,10 @@ impl MmapRingWriter {
         MmapRingWriter { m, h }
     }
 
+    pub fn mmap(&self) -> &MmapMut {
+        &self.m
+    }
+
     pub fn writer(&mut self) -> RingWriter<'_> {
         RingWriter::buf_at(&mut self.m, self.h, 0)
     }

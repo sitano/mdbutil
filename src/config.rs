@@ -22,9 +22,6 @@ pub struct Config {
         group = "redo_log_file_path"
     )]
     pub srv_log_file_path: Option<PathBuf>,
-
-    #[clap(default_value = "false", long)]
-    pub write: bool,
 }
 
 impl Config {

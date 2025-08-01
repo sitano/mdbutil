@@ -1,207 +1,175 @@
 use std::io::{Seek, Write};
 
 use clap::Parser;
-use mdbutil::{
-    Lsn,
-    config::Config,
-    log,
-    mtr::{Mtr, MtrChain},
-    mtr0types::MtrOperation,
-    ring::RingReader,
-};
+use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
+use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
+
+#[derive(Parser)]
+enum Cli {
+    Read(ReadCommand),
+    Write(WriteCommand),
+}
+
+#[derive(clap::Args)]
+struct ReadCommand {
+    #[clap(flatten)]
+    config: Config,
+}
+
+#[derive(clap::Args)]
+struct WriteCommand {
+    #[clap(flatten)]
+    config: Config,
+
+    #[clap(long = "size", help = "Size of the redo log file in bytes")]
+    size: u64,
+
+    #[clap(
+        long = "lsn",
+        help = "Redo log sequence number (LSN). Usually is MariaDB sequence number - 16."
+    )]
+    lsn: Lsn,
+}
 
 fn main() {
-    let config = Config::parse();
-    let log_file_path = config
-        .get_log_file_path()
-        .expect("Redo log file path not specified");
-    let log = log::Redo::open(&log_file_path).expect("Failed to open redo log");
+    let cli = Cli::parse();
+    match cli {
+        Cli::Read(cmd) => cmd.run(),
+        Cli::Write(cmd) => cmd.run().expect("Failed to write redo log"),
+    };
+}
 
-    println!("Header block: {}", log.header().first_lsn);
-    println!("Size: {}, Capacity: {}", log.size(), log.capacity());
+impl ReadCommand {
+    fn run(self) {
+        let log_file_path = self
+            .config
+            .get_log_file_path()
+            .expect("Redo log file path not specified");
+        let log = log::Redo::open(&log_file_path).expect("Failed to open redo log");
 
-    println!("{:#?}", log.header());
-    println!("{:#?}", log.checkpoint());
+        println!("Header block: {}", log.header().first_lsn);
+        println!("Size: {}, Capacity: {}", log.size(), log.capacity());
 
-    let mut file_checkpoint_chain = None;
-    let mut file_checkpoint_lsn = None;
-    let mut reader = log.reader();
-    let mut chains = 0usize;
-    loop {
-        let chain = match reader.parse_next() {
-            Ok(chain) => chain,
-            Err(err) => {
-                // test for EOM.
-                if let Some(err) = err.downcast_ref::<std::io::Error>()
-                    && err.kind() == std::io::ErrorKind::NotFound
-                {
+        println!("{:#?}", log.header());
+        println!("{:#?}", log.checkpoint());
+
+        let mut file_checkpoint_chain = None;
+        let mut file_checkpoint_lsn = None;
+        let mut reader = log.reader();
+        let mut chains = 0usize;
+        loop {
+            let chain = match reader.parse_next() {
+                Ok(chain) => chain,
+                Err(err) => {
+                    // test for EOM.
+                    if let Some(err) = err.downcast_ref::<std::io::Error>()
+                        && err.kind() == std::io::ErrorKind::NotFound
+                    {
+                        break;
+                    }
+
+                    eprintln!("ERROR: {err}: {:?}", err.source());
                     break;
                 }
+            };
 
-                eprintln!("ERROR: {err}: {:?}", err.source());
-                break;
-            }
-        };
-
-        chains += 1;
-        println!(
-            "{}: MTR Chain count={}, len={}, lsn={}",
-            chains,
-            chain.mtr.len(),
-            chain.len,
-            chain.lsn
-        );
-
-        let mut i = 0;
-        for mtr in &chain.mtr {
-            if mtr.op == MtrOperation::FileCheckpoint
-                && Some(mtr.lsn) == log.checkpoint().checkpoint_lsn
-            {
-                file_checkpoint_chain = Some(chain.clone());
-                file_checkpoint_lsn = mtr.file_checkpoint_lsn;
-            }
-
-            i += 1;
+            chains += 1;
             println!(
-                "  {i}: [{start}..{end}) {mtr}",
-                start = reader.reader().pos_to_offset(mtr.lsn as usize),
-                end = reader
-                    .reader()
-                    .pos_to_offset(mtr.lsn as usize + mtr.len as usize),
+                "{}: MTR Chain count={}, len={}, lsn={}",
+                chains,
+                chain.mtr.len(),
+                chain.len,
+                chain.lsn
             );
+
+            let mut i = 0;
+            for mtr in &chain.mtr {
+                if mtr.op == MtrOperation::FileCheckpoint
+                    && Some(mtr.lsn) == log.checkpoint().checkpoint_lsn
+                {
+                    file_checkpoint_chain = Some(chain.clone());
+                    file_checkpoint_lsn = mtr.file_checkpoint_lsn;
+                }
+
+                i += 1;
+                println!(
+                    "  {i}: [{start}..{end}) {mtr}",
+                    start = reader.reader().pos_to_offset(mtr.lsn as usize),
+                    end = reader
+                        .reader()
+                        .pos_to_offset(mtr.lsn as usize + mtr.len as usize),
+                );
+            }
         }
-    }
 
-    println!("Checkpoint LSN/1: {:?}", log.checkpoint().checkpoints[0]);
-    println!("Checkpoint LSN/2: {:?}", log.checkpoint().checkpoints[1]);
+        println!("Checkpoint LSN/1: {:?}", log.checkpoint().checkpoints[0]);
+        println!("Checkpoint LSN/2: {:?}", log.checkpoint().checkpoints[1]);
 
-    if let Some(file_checkpoint_lsn) = file_checkpoint_lsn {
-        println!("File checkpoint chain: {file_checkpoint_chain:?}");
-        println!("File checkpoint LSN: {file_checkpoint_lsn}");
-    } else {
-        eprintln!("WARNING: No file checkpoint found in redo log.");
-    }
+        if let Some(file_checkpoint_lsn) = file_checkpoint_lsn {
+            println!("File checkpoint chain: {file_checkpoint_chain:?}");
+            println!("File checkpoint LSN: {file_checkpoint_lsn}");
+        } else {
+            eprintln!("WARNING: No file checkpoint found in redo log.");
+        }
 
-    if log.header().version != log::FORMAT_10_8 {
-        eprintln!("WARNING: the redo log is not in 10.8 format.");
-    }
-
-    if log.checkpoint().checkpoint_lsn != Some(log.checkpoint().end_lsn) {
-        eprintln!("WARNING: checkpoint LSN is not at the end of the log.");
-    }
-
-    if config.write {
         if log.header().version != log::FORMAT_10_8 {
-            eprintln!("This tool only supports 10.8 redo logs.");
-            return;
+            eprintln!("WARNING: the redo log is not in 10.8 format.");
         }
 
         if log.checkpoint().checkpoint_lsn != Some(log.checkpoint().end_lsn) {
-            eprintln!("This tool only supports redo logs with a checkpoint at the end.");
-            eprintln!("Ensure --innodb_fast_shutdown=0 is set when starting the server.");
-            return;
+            eprintln!("WARNING: checkpoint LSN is not at the end of the log.");
         }
+    }
+}
 
-        if file_checkpoint_lsn.is_none() {
-            eprintln!("No file checkpoint found in redo log, nothing to write.");
-            return;
-        }
+impl WriteCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let path = self.config.get_log_file_path()?;
 
-        let file_checkpoint_lsn = file_checkpoint_lsn.expect("lsn exists") as Lsn;
+        let first_lsn = log::FIRST_LSN;
+        let size = self.size;
+        let capacity = size - first_lsn;
 
-        let dst = config
-            .get_log_file_dir()
-            .expect("parent directory should exist")
-            .join("ib_logfile0.new");
+        let mut log = Redo::writer(path.as_path(), first_lsn as usize, size)
+            .map_err(std::io::Error::other)?;
+        let mut writer = log.writer();
+
+        let header = RedoHeader::build_unencrypted_header_10_8(first_lsn, "test_creator")?;
+        writer.seek(std::io::SeekFrom::Start(0))?;
+        writer.write_all(&header)?;
+
+        let checkpoint = RedoHeader::build_unencrypted_header_10_8_checkpoint(self.lsn, self.lsn)?;
+        writer.seek(std::io::SeekFrom::Start(CHECKPOINT_1 as u64))?;
+        writer.write_all(&checkpoint)?;
+
+        writer.seek(std::io::SeekFrom::Start(CHECKPOINT_2 as u64))?;
+        writer.write_all(&checkpoint)?;
 
         let mut file_checkpoint = vec![];
-        let header = log.header().first_lsn;
-        let capacity = log.capacity();
-        Mtr::build_file_checkpoint(&mut file_checkpoint, header, capacity, file_checkpoint_lsn)
-            .unwrap();
+        Mtr::build_file_checkpoint(&mut file_checkpoint, first_lsn, capacity, self.lsn).unwrap();
         file_checkpoint.push(0x0); // end marker
 
-        let mut r0 = RingReader::new(file_checkpoint.as_slice());
-        let chain = MtrChain::parse_next(&mut r0).unwrap();
-        let mtr = chain.mtr[0];
+        writer.seek(std::io::SeekFrom::Start(self.lsn))?;
+        writer.write_all(&file_checkpoint)?;
 
-        let target_lsn = log
-            .checkpoint()
-            .checkpoint_lsn
-            .expect("checkpoint lsn must be present");
-        let src_reader = log.reader();
-        let target_offset = src_reader.reader().pos_to_offset(target_lsn as usize) as u64;
+        log.mmap().flush(0..size as usize)?;
 
-        let target_header = log::RedoHeader::build_unencrypted_header_10_8(
-            log.header().first_lsn,
-            &log.header().creator,
-        )
-        .expect("Failed to build header");
-        let target_cp_lsn =
-            log::RedoHeader::build_unencrypted_header_10_8_checkpoint(target_lsn, target_lsn)
-                .expect("Failed to build checkpoint header");
+        drop(log);
 
-        println!("New MTR: {mtr:#?}");
         println!(
-            "Writing file checkpoint: {file_checkpoint:#x?} at pos: {target_offset} \
-             ({target_offset:#x})"
+            "Writing file checkpoint: {file_checkpoint:x?} at pos: {target_offset} \
+             ({target_offset:#x})",
+            target_offset =
+                ring::pos_to_offset(first_lsn as usize, capacity as usize, self.lsn as usize)
         );
 
-        let mut file_writer = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&dst)
-            .expect("Failed to open log file for writing");
-
-        // set file size.
-        file_writer
-            .set_len(log.size())
-            .expect("Failed to set file size");
-
-        // header
-        file_writer
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("Failed to seek to end of file");
-        file_writer
-            .write_all(&target_header)
-            .expect("Failed to write file checkpoint");
-
-        // checkpoint lsns
-        file_writer
-            .seek(std::io::SeekFrom::Start(log::CHECKPOINT_1 as u64))
-            .expect("Failed to seek to end of file");
-        file_writer
-            .write_all(&target_cp_lsn)
-            .expect("Failed to write file checkpoint");
-        file_writer
-            .seek(std::io::SeekFrom::Start(log::CHECKPOINT_2 as u64))
-            .expect("Failed to seek to end of file");
-        file_writer
-            .write_all(&target_cp_lsn)
-            .expect("Failed to write file checkpoint");
-
-        // file_checkpoint
-        file_writer
-            .seek(std::io::SeekFrom::Start(target_offset))
-            .expect("Failed to seek to end of file");
-        // TODO: wrap
-        file_writer
-            .write_all(&file_checkpoint)
-            .expect("Failed to write file checkpoint");
-
-        file_writer.flush().expect("Failed to flush file writer");
-        file_writer.sync_all().expect("Failed to sync file writer");
-
-        drop(file_writer);
-
-        let target_log = log::Redo::open(&dst).expect("Failed to open target redo log");
+        let target_log = Redo::open(&path).expect("Failed to open target redo log");
 
         println!("Target header block: {}", target_log.header().first_lsn);
         println!(
             "Size: {}, Capacity: {:#x}",
             target_log.size(),
-            log.capacity()
+            target_log.capacity()
         );
 
         println!("{:#?}", target_log.header());
@@ -254,5 +222,7 @@ fn main() {
         let file_checkpoint_lsn =
             file_checkpoint_lsn.expect("No file checkpoint found in redo target_log") as Lsn;
         println!("Target file checkpoint LSN: {file_checkpoint_lsn}");
+
+        Ok(())
     }
 }
