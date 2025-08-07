@@ -1,6 +1,8 @@
 MariaDB experimental utilities for testing and development purposes.
 ===
 
+On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).
+
 Redo log parser for 11.8.x:
 
 ```
@@ -16,54 +18,46 @@ $ mycli -S /tmp/mysql.sock
   )
   SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
 $ pkill mariadbd
-$ cargo run -- --log-group-path data
+$ cargo run -- read --log-file-path data/ib_logfile0
 
 Header block: 12288
-Size: 10485760, Capacity: 10473472
+Size: 100663296, Capacity: 100651008
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
-    creator: "MariaDB 11.6.2",
-    crc: 224651864,
+    creator: "WorkatoDB Controller",
+    crc: 509551572,
 }
 RedoCheckpointCoordinate {
     checkpoints: [
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 10474046,
-            end_lsn: 10474046,
-            checksum: 3618321683,
+            checkpoint_lsn: 84875,
+            end_lsn: 84875,
+            checksum: 2243572435,
         },
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 10474015,
-            end_lsn: 10474015,
-            checksum: 3405426044,
+            checkpoint_lsn: 84793,
+            end_lsn: 84793,
+            checksum: 3358478536,
         },
     ],
     checkpoint_lsn: Some(
-        10474046,
+        84875,
     ),
     checkpoint_no: Some(
         1,
     ),
-    end_lsn: 10474046,
+    end_lsn: 84875,
     encrypted: false,
     version: 1349024115,
     start_after_restore: false,
 }
-Mtr {
-    len: 10,
-    space_id: 0,
-    page_no: 0,
-    op: 240,
-    gen_t_marker: 1,
-    checksum: 1749635938,
-    file_checkpoint_lsn: Some(
-        10474046,
-    ),
-}
-Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 10474046, end_lsn: 10474046, checksum: 3618321683 }
-Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 10474015, end_lsn: 10474015, checksum: 3405426044 }
-File checkpoint LSN: 10474046
+1: MTR Chain count=1, len=16, lsn=84875
+  1: [84875..84886) Mtr { space_id: 0, page_no: 0, op: FileCheckpoint } at (84875+11)
+Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 84875, end_lsn: 84875, checksum: 2243572435 }
+Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 84793, end_lsn: 84793, checksum: 3358478536 }
+File checkpoint chain: Some(MtrChain { lsn: 84875, len: 16, marker: 1, checksum: 3078137627, mtr: [Mtr { lsn: 84875, len: 11, space_id: 0, page_no: 0, op: FileCheckpoint, file_checkpoint_lsn: Some(84875) }] })
+File checkpoint LSN: 84875
 ```
 
 or without the checkpoint:
@@ -81,195 +75,110 @@ $ mycli -S /tmp/mysql.sock
   )
   SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
 $ pkill -9 mariadbd
-$ cargo run -- --log-group-path data
+$ cargo run -- read --log-file-path data/ib_logfile0
 
 Header block: 12288
-Size: 10485760, Capacity: 10473472
+Size: 100663296, Capacity: 100651008
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
-    creator: "MariaDB 11.6.2",
-    crc: 224651864,
+    creator: "WorkatoDB Controller",
+    crc: 509551572,
 }
 RedoCheckpointCoordinate {
     checkpoints: [
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 6880644,
-            end_lsn: 9694174,
-            checksum: 1144991502,
+            checkpoint_lsn: 83365,
+            end_lsn: 83365,
+            checksum: 694933498,
         },
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 9691474,
-            end_lsn: 10553265,
-            checksum: 2431378773,
+            checkpoint_lsn: 83267,
+            end_lsn: 83267,
+            checksum: 3695364396,
         },
     ],
     checkpoint_lsn: Some(
-        9691474,
+        83365,
     ),
     checkpoint_no: Some(
-        0,
+        1,
     ),
-    end_lsn: 10553265,
+    end_lsn: 83365,
     encrypted: false,
     version: 1349024115,
     start_after_restore: false,
 }
-MTR Chain count=4, len=27, lsn=9691474
-  1: Mtr { space_id: 8, page_no: 76, op: Memset }
-  2: Mtr { space_id: 8, page_no: 76, op: Write }
-  3: Mtr { space_id: 8, page_no: 76, op: Memset }
-  4: Mtr { space_id: 8, page_no: 76, op: Option }
+1: MTR Chain count=1, len=16, lsn=83365
+  1: [83365..83376) Mtr { space_id: 0, page_no: 0, op: FileCheckpoint } at (83365+11)
+2: MTR Chain count=37, len=289, lsn=83381
+  1: [83381..83386) Mtr { space_id: 3, page_no: 0, op: Write } at (83381+5)
+  2: [83386..83392) Mtr { space_id: 3, page_no: 2, op: Write } at (83386+6)
+  3: [83392..83396) Mtr { space_id: 3, page_no: 2, op: Memset } at (83392+4)
+  4: [83396..83400) Mtr { space_id: 3, page_no: 2, op: Memmove } at (83396+4)
 ...
-MTR Chain count=13, len=89, lsn=11344877
-  1: Mtr { space_id: 3, page_no: 4, op: Write }
-  2: Mtr { space_id: 3, page_no: 4, op: Write }
-  ...
-  10: Mtr { space_id: 3, page_no: 2, op: Memset }
-  11: Mtr { space_id: 3, page_no: 4, op: Option }
-  12: Mtr { space_id: 3, page_no: 2, op: Option }
-  13: Mtr { space_id: 3, page_no: 0, op: Option }
-Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 6880644, end_lsn: 9694174, checksum: 1144991502 }
-Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 9691474, end_lsn: 10553265, checksum: 2431378773 }
-File checkpoint chain: Some(MtrChain { lsn: 10553265, len: 31, checksum: 2542014928, mtr: [Mtr { space_id: 8, page_no: 0, op: FileModify, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 0, page_no: 0, op: FileCheckpoint, file_checkpoint_lsn: Some(9691474), marker: 0 }, Mtr { space_id: 5411, page_no: 6, op: Option, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 252, page_no: 0, op: FreePage, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 252, page_no: 0, op: Extended, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Memset, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Write, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Memset, file_checkpoint_lsn: None, marker: 0 }, Mtr { space_id: 8, page_no: 252, op: Option, file_checkpoint_lsn: None, marker: 0 }] })
-File checkpoint LSN: 9691474
-WARNING: checkpoint LSN is not at the end of the log.
+21: MTR Chain count=13, len=89, lsn=84704
+  1: [84704..84714) Mtr { space_id: 3, page_no: 4, op: Write } at (84704+10)
+...
+  13: [84780..84788) Mtr { space_id: 3, page_no: 0, op: Option } at (84780+8)
+Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 83365, end_lsn: 83365, checksum: 694933498 }
+Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 83267, end_lsn: 83267, checksum: 3695364396 }
+File checkpoint chain: Some(MtrChain { lsn: 83365, len: 16, marker: 1, checksum: 3479569512, mtr: [Mtr { lsn: 83365, len: 11, space_id: 0, page_no: 0, op: FileCheckpoint, file_checkpoint_lsn: Some(83365) }] })
+File checkpoint LSN: 83365
+
 ```
 
-to craft fake redo log file checkpoint use `--write`. MariaDB ensures that:
+to craft fake redo log file checkpoint use `write`. MariaDB ensures that:
 
 - file checkpoint is the latest entry in redo log by comparing its LSN to the
   end of the file LSN (redo log LSN).
 - file checkpoint LSN is not less than the pages LSN in the tablespaces.
 
 ```
-$ cargo run -- --log-group-path data --write
+$ cargo run -- write --log-file-path data/ib_logfile0 --size 100663296 --lsn 8336
 
-Header block: 12288
-Size: 100663296, Capacity: 0x5ffd000
-RedoHeader {
-    version: 1349024115,
-    first_lsn: 12288,
-    creator: "MariaDB 11.6.2",
-    crc: 224651864,
-}
-RedoCheckpointCoordinate {
-    checkpoints: [
-        RedoHeaderCheckpoint {
-            checkpoint_lsn: 2847229,
-            end_lsn: 2847229,
-            checksum: 3046192467,
-        },
-        RedoHeaderCheckpoint {
-            checkpoint_lsn: 2847328,
-            end_lsn: 2847328,
-            checksum: 3415854794,
-        },
-    ],
-    checkpoint_lsn: Some(
-        2847328,
-    ),
-    checkpoint_no: Some(
-        0,
-    ),
-    end_lsn: 2847328,
-    encrypted: false,
-    version: 1349024115,
-    start_after_restore: false,
-}
-Mtr {
-    len: 10,
-    space_id: 0,
-    page_no: 0,
-    op: 240,
-    checksum: 2504227498,
-    file_checkpoint_lsn: Some(
-        2847328,
-    ),
-}
-Checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 2847229, end_lsn: 2847229, checksum: 3046192467 }
-Checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 2847328, end_lsn: 2847328, checksum: 3415854794 }
-File checkpoint LSN: 2847328
-New MTR: Mtr {
-    len: 10,
-    space_id: 0,
-    page_no: 0,
-    op: 240,
-    checksum: 2504227498,
-    file_checkpoint_lsn: Some(
-        2847328,
-    ),
-}
-Writing file checkpoint: [
-    0xfa,
-    0x0,
-    0x0,
-    0x0,
-    0x0,
-    0x0,
-    0x0,
-    0x0,
-    0x2b,
-    0x72,
-    0x60,
-    0x1,
-    0x95,
-    0x43,
-    0x7a,
-    0xaa,
-    0x0,
-] at pos: 2847328 (0x2b7260)
+Writing file checkpoint: [fa, 0, 0, 0, 0, 0, 0, 0, 1, 45, a6, 1, dc, 36, f7, 9c, 0] at pos: 83366 (0x145a6)
 Target header block: 12288
 Size: 100663296, Capacity: 0x5ffd000
 RedoHeader {
     version: 1349024115,
     first_lsn: 12288,
-    creator: "MariaDB 11.6.2",
-    crc: 224651864,
+    creator: "test_creator",
+    crc: 2774233419,
 }
 RedoCheckpointCoordinate {
     checkpoints: [
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 2847328,
-            end_lsn: 2847328,
-            checksum: 3415854794,
+            checkpoint_lsn: 83366,
+            end_lsn: 83366,
+            checksum: 3290552678,
         },
         RedoHeaderCheckpoint {
-            checkpoint_lsn: 2847328,
-            end_lsn: 2847328,
-            checksum: 3415854794,
+            checkpoint_lsn: 83366,
+            end_lsn: 83366,
+            checksum: 3290552678,
         },
     ],
     checkpoint_lsn: Some(
-        2847328,
+        83366,
     ),
     checkpoint_no: Some(
         0,
     ),
-    end_lsn: 2847328,
+    end_lsn: 83366,
     encrypted: false,
     version: 1349024115,
     start_after_restore: false,
 }
-Mtr {
-    len: 10,
-    space_id: 0,
-    page_no: 0,
-    op: 240,
-    checksum: 2504227498,
-    file_checkpoint_lsn: Some(
-        2847328,
-    ),
-}
-Target checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 2847328, end_lsn: 2847328, checksum: 3415854794 }
-Target checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 2847328, end_lsn: 2847328, checksum: 3415854794 }
-Target file checkpoint LSN: 2847328
-
-$ cp ./data/ib_logfile0.new ./data/ib_logfile0
+  [83366..83377) Mtr { space_id: 0, page_no: 0, op: FileCheckpoint } at (83366+11)
+Target checkpoint LSN/1: RedoHeaderCheckpoint { checkpoint_lsn: 83366, end_lsn: 83366, checksum: 3290552678 }
+Target checkpoint LSN/2: RedoHeaderCheckpoint { checkpoint_lsn: 83366, end_lsn: 83366, checksum: 3290552678 }
+Target file checkpoint LSN: 83366
 
 # and now we can start mariadbd with the new redo log file
 
 $ mariadbd --datadir ./data --innodb_fast_shutdown=0
+
 2025-07-22 17:51:49 0 [Warning] Setting lower_case_table_names=2 because file system for ./data/ is case insensitive
 2025-07-22 17:51:49 0 [Note] Starting MariaDB 11.6.2-MariaDB-debug source revision d8dad8c3b54cd09fefce7bc3b9749f427eed9709 server_uid jrmwW5r3Tn164Vhvku7bB+z6nV4= as process 13591
 2025-07-22 17:51:49 0 [Note] InnoDB: !!!!!!!! UNIV_DEBUG switched on !!!!!!!!!
@@ -278,12 +187,12 @@ $ mariadbd --datadir ./data --innodb_fast_shutdown=0
 2025-07-22 17:51:49 0 [Note] InnoDB: Using generic crc32 instructions
 2025-07-22 17:51:49 0 [Note] InnoDB: Initializing buffer pool, total size = 128.000MiB, chunk size = 2.000MiB
 2025-07-22 17:51:49 0 [Note] InnoDB: Completed initialization of buffer pool
-2025-07-22 17:51:49 0 [Note] InnoDB: End of log at LSN=2847344
+2025-07-22 17:51:49 0 [Note] InnoDB: End of log at LSN=83366
 2025-07-22 17:51:49 0 [Note] InnoDB: Opened 3 undo tablespaces
 2025-07-22 17:51:49 0 [Note] InnoDB: 128 rollback segments in 3 undo tablespaces are active.
 2025-07-22 17:51:49 0 [Note] InnoDB: Setting file './ibtmp1' size to 12.000MiB. Physically writing the file full; Please wait ...
 2025-07-22 17:51:49 0 [Note] InnoDB: File './ibtmp1' size is now 12.000MiB.
-2025-07-22 17:51:49 0 [Note] InnoDB: log sequence number 2847344; transaction id 26
+2025-07-22 17:51:49 0 [Note] InnoDB: log sequence number 83366+16; transaction id 26
 2025-07-22 17:51:49 0 [Note] InnoDB: Loading buffer pool(s) from ./data/ib_buffer_pool
 2025-07-22 17:51:49 0 [Note] Plugin 'FEEDBACK' is disabled.
 2025-07-22 17:51:49 0 [Note] Plugin 'wsrep-provider' is disabled.
