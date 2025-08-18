@@ -1,23 +1,25 @@
 use std::io::{Seek, Write};
+use std::path::PathBuf;
 
 use clap::Parser;
-use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
-use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
+use mdbutil::log::{Redo, RedoHeader, CHECKPOINT_1, CHECKPOINT_2};
+use mdbutil::{config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring, Lsn};
 
 #[derive(Parser)]
 enum Cli {
-    Read(ReadCommand),
-    Write(WriteCommand),
+    ReadRedo(ReadRedoCommand),
+    WriteRedo(WriteRedoCommand),
+    ReadTablespace(ReadTablespaceCommand),
 }
 
 #[derive(clap::Args)]
-struct ReadCommand {
+struct ReadRedoCommand {
     #[clap(flatten)]
     config: Config,
 }
 
 #[derive(clap::Args)]
-struct WriteCommand {
+struct WriteRedoCommand {
     #[clap(flatten)]
     config: Config,
 
@@ -31,15 +33,33 @@ struct WriteCommand {
     lsn: Lsn,
 }
 
+#[derive(clap::Args)]
+struct ReadTablespaceCommand {
+    #[clap(
+        long = "file-path",
+        help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)",
+        group = "redo_log_file_path"
+    )]
+    pub file_path: Option<PathBuf>,
+
+    #[clap(
+        long = "page-size",
+        help = "Page size in bytes (default: 16384)",
+        default_value = "16384"
+    )]
+    pub page_size: usize,
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli {
-        Cli::Read(cmd) => cmd.run(),
-        Cli::Write(cmd) => cmd.run().expect("Failed to write redo log"),
+        Cli::ReadRedo(cmd) => cmd.run(),
+        Cli::WriteRedo(cmd) => cmd.run().expect("Failed to write redo log"),
+        Cli::ReadTablespace(cmd) => cmd.run().expect("Failed to read tablespace"),
     };
 }
 
-impl ReadCommand {
+impl ReadRedoCommand {
     fn run(self) {
         let log_file_path = self
             .config
@@ -122,7 +142,7 @@ impl ReadCommand {
     }
 }
 
-impl WriteCommand {
+impl WriteRedoCommand {
     fn run(&self) -> anyhow::Result<()> {
         let path = self.config.get_log_file_path()?;
 
@@ -222,6 +242,33 @@ impl WriteCommand {
         let file_checkpoint_lsn =
             file_checkpoint_lsn.expect("No file checkpoint found in redo target_log") as Lsn;
         println!("Target file checkpoint LSN: {file_checkpoint_lsn}");
+
+        Ok(())
+    }
+}
+
+impl ReadTablespaceCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let file_path = self
+            .file_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Tablespace file path not specified"))?;
+        let page_size = self.page_size;
+
+        let mmap_reader = mdbutil::tablespace::MmapTablespaceReader::open(file_path, page_size)?;
+        let num_pages = mmap_reader.mmap().len() / page_size;
+
+        let reader = mmap_reader.reader()?;
+
+        println!(
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}",
+            file_path.display(),
+            mmap_reader.mmap().len(),
+            page_size,
+            num_pages
+        );
+
+        println!("{}", reader);
 
         Ok(())
     }
