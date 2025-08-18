@@ -1,10 +1,17 @@
 pub mod config;
+pub mod fil0fil;
+pub mod fsp0fsp;
+pub mod fsp0types;
+pub mod fut0lst;
 pub mod log;
 pub mod mach;
 pub mod mtr;
 pub mod mtr0log;
 pub mod mtr0types;
 pub mod ring;
+pub mod tablespace;
+pub mod univ;
+pub mod ut0ut;
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.
 pub type Lsn = u64;
