@@ -2,8 +2,8 @@ use std::io::{Seek, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use mdbutil::log::{Redo, RedoHeader, CHECKPOINT_1, CHECKPOINT_2};
-use mdbutil::{config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring, Lsn};
+use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
+use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
 #[derive(Parser)]
 enum Cli {

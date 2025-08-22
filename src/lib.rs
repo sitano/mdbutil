@@ -8,9 +8,11 @@ pub mod mach;
 pub mod mtr;
 pub mod mtr0log;
 pub mod mtr0types;
+pub mod page0page;
 pub mod ring;
 pub mod tablespace;
 pub mod univ;
+pub mod ut0byte;
 pub mod ut0ut;
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.

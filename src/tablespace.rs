@@ -10,6 +10,7 @@ use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 use crate::fil0fil;
 use crate::fsp0fsp;
 use crate::mach;
+use crate::page0page;
 
 #[derive(Debug, Clone)]
 pub struct TablespaceReader<'a> {
@@ -90,6 +91,200 @@ impl<'a> TablespaceReader<'a> {
         }
 
         Ok((space_id, flags))
+    }
+
+    /// Check the consistency of the first page of a datafile when the tablespace is opened. This
+    /// occurs before the fil_space_t is created so the Space ID found here must not already be
+    /// open. m_is_valid is set true on success, else false. Reference:
+    /// fsp0file.cc:Datafile::validate_first_page().
+    ///
+    /// # Arguments
+    /// * `first_page` - the contents of the first page
+    pub fn validate_first_page(&self) -> Result<()> {
+        // Instead of guessing if we had a call to read_first_page()
+        // always check consistency of the read_first_page_flags().
+        if self.order == 0 {
+            let (space_id, flags) = self.read_first_page_flags()?;
+
+            if space_id != self.space_id || flags != self.flags {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Inconsistent tablespace ID or flags in file, expected (space_id={}, flags={:#x}) but found (space_id={}, flags={:#x})",
+                        self.space_id, self.flags, space_id, flags
+                    ),
+                ));
+            }
+        }
+
+        if fil0fil::physical_size(self.flags, self.page) > self.page {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "InnodDB: File should be longer than {} bytes, Space ID: {}, Flags: {}",
+                    self.page, self.space_id, self.flags
+                ),
+            ));
+        }
+
+        // Check if the whole page is blank.
+        if self.space_id == 0 && self.flags == 0 {
+            let mut nonzero_bytes = self.page;
+
+            while nonzero_bytes > 0 && self.buf[nonzero_bytes - 1] == 0 {
+                nonzero_bytes -= 1;
+            }
+
+            if nonzero_bytes == 0 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "InnoDB: Header page consists of zero bytes in Space ID: {}, Flags: {}",
+                        self.space_id, self.flags
+                    ),
+                ));
+            }
+        }
+
+        // is_ibd is true if this is an .ibd file (not the system tablespace).
+        let is_ibd = self.space_id != 0;
+
+        if !fil0fil::is_valid_flags(self.flags, is_ibd, self.page) {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "InnoDB: Tablespace flags are invalid in Space ID: {}, Flags: {}",
+                    self.space_id, self.flags
+                ),
+            ));
+        }
+
+        let logical_size = fil0fil::logical_size(self.flags);
+
+        if self.page != logical_size {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "InnoDB: Data file uses page size {}, but the innodb_page_size start-up parameter is {}",
+                    logical_size, self.page
+                ),
+            ));
+        }
+
+        let page0_ptr = 0;
+        if page0page::page_get_page_no(self.buf, page0_ptr, self.page) != 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "InnoDB: Header pages contains inconsistent data (page number is not 0), Space ID: {}, Flags: {}",
+                    self.space_id, self.flags
+                ),
+            ));
+        }
+
+        /* if self.m_space_id >= SRV_SPACE_ID_UPPER_BOUND {
+            error_txt = Some("A bad Space ID was found");
+            self.free_first_page();
+
+            if recv_recovery_is_on() || srv_operation == SRV_OPERATION_BACKUP {
+                self.m_defer = true;
+                return DB_SUCCESS;
+            }
+
+            sql_print_information(&format!(
+                "InnoDB: {} in datafile: {}, Space ID: {}, Flags: {}",
+                error_txt.unwrap_or("Unknown error"),
+                self.m_filepath,
+                self.m_space_id,
+                self.m_flags
+            ));
+            self.m_is_valid = false;
+            return DB_CORRUPTION;
+        }
+
+        match buf_page_is_corrupted(false, first_page.unwrap(), self.m_flags) {
+            NOT_CORRUPTED => {}
+            CORRUPTED_FUTURE_LSN => {
+                error_txt = Some("LSN is in the future");
+                self.free_first_page();
+
+                if recv_recovery_is_on() || srv_operation == SRV_OPERATION_BACKUP {
+                    self.m_defer = true;
+                    return DB_SUCCESS;
+                }
+
+                sql_print_information(&format!(
+                    "InnoDB: {} in datafile: {}, Space ID: {}, Flags: {}",
+                    error_txt.unwrap_or("Unknown error"),
+                    self.m_filepath,
+                    self.m_space_id,
+                    self.m_flags
+                ));
+                self.m_is_valid = false;
+                return DB_CORRUPTION;
+            }
+            CORRUPTED_OTHER => {
+                error_txt = Some("Checksum mismatch");
+                self.free_first_page();
+
+                if recv_recovery_is_on() || srv_operation == SRV_OPERATION_BACKUP {
+                    self.m_defer = true;
+                    return DB_SUCCESS;
+                }
+
+                sql_print_information(&format!(
+                    "InnoDB: {} in datafile: {}, Space ID: {}, Flags: {}",
+                    error_txt.unwrap_or("Unknown error"),
+                    self.m_filepath,
+                    self.m_space_id,
+                    self.m_flags
+                ));
+                self.m_is_valid = false;
+                return DB_CORRUPTION;
+            }
+        }
+
+        let _lock = fil_system.mutex.lock().unwrap();
+
+        let space = fil_space_get_by_id(self.m_space_id);
+
+        if let Some(space) = space {
+            let node = space.chain.first();
+
+            if let Some(node) = node {
+                if self.m_filepath == node.name {
+                    // ok_exit:
+                    return DB_SUCCESS;
+                }
+            }
+
+            if self.m_space_id == 0
+                && (recv_recovery_is_on() || srv_operation == SRV_OPERATION_BACKUP)
+            {
+                self.m_defer = true;
+                return DB_SUCCESS;
+            }
+
+            ib_error(&format!(
+            "Attempted to open a previously opened tablespace. Previous tablespace: {} uses space ID: {}. Cannot open filepath: {} which uses the same space ID.",
+            node.map(|n| n.name.as_str()).unwrap_or("(unknown)"),
+            self.m_space_id,
+            self.m_filepath
+        ));
+        }
+
+        if space.is_some() {
+            self.m_is_valid = false;
+            self.free_first_page();
+
+            return if is_predefined_tablespace(self.m_space_id) {
+                DB_CORRUPTION
+            } else {
+                DB_TABLESPACE_EXISTS
+            };
+        }*/
+
+        Ok(())
     }
 
     pub fn ensure(&self, pos: usize, len: usize) -> Result<()> {
@@ -173,6 +368,10 @@ impl MmapTablespaceReader {
         reader
             .parse_first_page()
             .context("parse first page of tablespace")?;
+
+        reader
+            .validate_first_page()
+            .context("validate first page of tablespace")?;
 
         Ok(reader)
     }
