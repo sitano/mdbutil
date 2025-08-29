@@ -14,7 +14,7 @@ use crate::ut0byte;
 #[inline]
 pub const fn page_align(ptr: usize, page_size: usize) -> usize {
     let ptr0 = ut0byte::ut_align_down(ptr, page_size);
-    debug_assert!(ptr0 % univ::UNIV_PAGE_SIZE_MIN as usize == 0);
+    debug_assert!(ptr0.is_multiple_of(univ::UNIV_PAGE_SIZE_MIN as usize));
     ptr0
 }
 

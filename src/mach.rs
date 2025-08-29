@@ -7,6 +7,10 @@ use byteorder::{BigEndian, ByteOrder};
 // The most significant byte is at the lowest address.
 type E = BigEndian;
 
+pub fn mach_read_from_2(buf: &[u8]) -> u16 {
+    E::read_u16(buf)
+}
+
 pub fn mach_read_from_4(buf: &[u8]) -> u32 {
     E::read_u32(buf)
 }

@@ -182,7 +182,7 @@ pub static FSEG_MAGIC_N_BYTES: [u8; 4] = [0x05, 0xd6, 0x69, 0xd2];
 /// FSEG_FREE_LIST_MAX_LEN many
 pub const FSEG_FREE_LIST_LIMIT: u32 = 40;
 pub const FSEG_FREE_LIST_MAX_LEN: u32 = 4;
-/// @}
+// @}
 
 /* @defgroup Extent Descriptor Constants (moved from fsp0fsp.c) @{ */
 

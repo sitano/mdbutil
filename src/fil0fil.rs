@@ -1,4 +1,5 @@
 use crate::fsp0types;
+use crate::mach;
 use crate::univ;
 
 /// Common InnoDB file extensions
@@ -30,7 +31,7 @@ pub struct fil_addr_t {
     pub boffset: u16,
 }
 
-/** The byte offsets on a file page for various variables @{ */
+/* The byte offsets on a file page for various variables @{ */
 
 /// in < MySQL-4.0.14 space id the page belongs to (== 0) but in later versions the 'new' checksum
 /// of the page.
@@ -98,7 +99,7 @@ not using full_crc32 */
 pub const FIL_PAGE_ENCRYPT_COMP_METADATA_LEN: u32 = 4;
 /* @} */
 
-/** File page trailer @{ */
+/* File page trailer @{ */
 
 /// the low 4 bytes of this are used
 /// to store the page checksum, the last 4 bytes should be identical to the last 4 bytes of
@@ -348,4 +349,24 @@ pub fn is_valid_flags(flags: u32, is_ibd: bool, page_size: usize) -> bool {
     // buggy MariaDB 10.1 format flags for PAGE_COMPRESSED=1 PAGE_COMPRESSION_LEVEL={0,2,3}
     // as valid-looking PAGE_SSIZE if this is known to be an .ibd file and we are using the default innodb_page_size=16k.
     ssize == 0 || !is_ibd || page_size != univ::UNIV_PAGE_SIZE_ORIG as usize
+}
+
+/// Returns whether the page type is B-tree or R-tree index.
+#[allow(dead_code)]
+fn fil_page_type_is_index(page_type: u16) -> bool {
+    matches!(
+        page_type,
+        FIL_PAGE_TYPE_INSTANT | FIL_PAGE_INDEX | FIL_PAGE_RTREE
+    )
+}
+
+/// Check whether the page is an index page (either regular Btree index or Rtree index).
+#[allow(dead_code)]
+fn fil_page_index_page_check(page: &[u8]) -> bool {
+    fil_page_type_is_index(fil_page_get_type(page))
+}
+
+/// Get the file page type.
+pub fn fil_page_get_type(page: &[u8]) -> u16 {
+    mach::mach_read_from_2(&page[FIL_PAGE_TYPE as usize..])
 }
