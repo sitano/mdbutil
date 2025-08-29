@@ -56,7 +56,7 @@ pub const FSP_EXTENT_SIZE_MIN: u32 = 1048576 / univ::UNIV_PAGE_SIZE_MIN;
 offset */
 pub const FSEG_PAGE_DATA: u32 = fil0fil::FIL_PAGE_DATA;
 
-/** @name File segment header
+/* @name File segment header
 The file segment header points to the inode describing the file segment. */
 /* @{ */
 
@@ -94,7 +94,7 @@ this many file pages */
 /* #define XDES_DESCRIBED_PER_PAGE		srv_page_size */
 /* This has been replaced with either srv_page_size or page_zip->size. */
 
-/** @name The space low address page map
+/* @name The space low address page map
 The 2 pages at FSP_XDES_OFFSET are repeated
 every XDES_DESCRIBED_PER_PAGE pages in every tablespace. */
 /* @{ */
@@ -121,7 +121,7 @@ pub const FSP_DICT_HDR_PAGE_NO: u32 = 7;
 /// returns true if tablespace is system temporary.
 #[allow(non_snake_case)]
 pub fn FSP_IS_SYSTEM_TEMPORARY(space_id: u32) -> bool {
-    return space_id == SRV_TMP_SPACE_ID;
+    space_id == SRV_TMP_SPACE_ID
 }
 
 /* @defgroup fsp_flags InnoDB Tablespace Flag Constants @{ */
