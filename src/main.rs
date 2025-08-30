@@ -270,6 +270,8 @@ impl ReadTablespaceCommand {
 
         println!("{}", reader);
 
+        println!("{:#?}", reader.page(0)?);
+
         Ok(())
     }
 }

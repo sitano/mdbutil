@@ -1,3 +1,4 @@
+pub mod buf0buf;
 pub mod config;
 pub mod fil0fil;
 pub mod fsp0fsp;
@@ -9,6 +10,7 @@ pub mod mtr;
 pub mod mtr0log;
 pub mod mtr0types;
 pub mod page0page;
+pub mod page_buf;
 pub mod ring;
 pub mod tablespace;
 pub mod univ;
