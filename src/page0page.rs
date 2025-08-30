@@ -36,7 +36,6 @@ pub const fn page_offset(ptr: usize, page_size: usize) -> u16 {
 /// # Arguments
 /// * `buf` - slice representing the tablespace
 /// * `ptr` - pointer to the page frame (as usize)
-/// * `page_size` - size of the page
 ///
 /// # Returns
 /// Page number as u32
