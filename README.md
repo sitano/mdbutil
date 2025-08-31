@@ -1,6 +1,31 @@
 MariaDB experimental utilities for testing and development purposes.
 ===
 
+On Undo Log structure [link](https://sitano.github.io/mariadb/innodb/undolog/recovery/2025/08/08/notes-on-mariadb-undo-log/).
+
+Read tablespace:
+
+```
+$ cargo run read-tablespace --file-path ./undo003
+Opened tablespace file: ./undo003 with size: 10485760 bytes, page size: 16384 bytes, num pages: 640, flags: FULL_CRC32|PAGE_SSIZE=5|POST_ANTELOPE|RAW=0x00000015
+Tablespace(space_id=3, flags=0x15, page_size=16384, order=0)
+PageBuf { space_id: 3, page_no: 0, prev_page: None, next_page: None, page_lsn: 81355, page_type: FspHdr, checksum: 1539327498 }
+FSP header: fsp_header_t {
+    space_id: 3,
+    not_used: 0,
+    space_pages: 640,
+    free_limit: 320,
+    flags: 21,
+    free_frag_pages: 45,
+    free_extens: flst_base_node_t { len: 4, first: fil_addr_t { page: 0, boffset: 198 }, last: fil_addr_t { page: 0, boffset: 318 } },
+    free_frag: flst_base_node_t { len: 1, first: fil_addr_t { page: 0, boffset: 158 }, last: fil_addr_t { page: 0, boffset: 158 } },
+    full_frag: flst_base_node_t { len: 0, first: fil_addr_t { page: 4294967295, boffset: 0 }, last: fil_addr_t { page: 4294967295, boffset: 0 } },
+    seg_id: 47,
+    seg_inodes_full: flst_base_node_t { len: 0, first: fil_addr_t { page: 4294967295, boffset: 0 }, last: fil_addr_t { page: 4294967295, boffset: 0 } },
+    seg_inodes_free: flst_base_node_t { len: 1, first: fil_addr_t { page: 2, boffset: 38 }, last: fil_addr_t { page: 2, boffset: 38 } },
+}
+```
+
 On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).
 
 Redo log parser for 11.8.x:
@@ -18,7 +43,7 @@ $ mycli -S /tmp/mysql.sock
   )
   SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
 $ pkill mariadbd
-$ cargo run -- read --log-file-path data/ib_logfile0
+$ cargo run -- read-redo --log-file-path data/ib_logfile0
 
 Header block: 12288
 Size: 100663296, Capacity: 100651008
@@ -75,7 +100,7 @@ $ mycli -S /tmp/mysql.sock
   )
   SELECT RPAD(CONCAT(FLOOR(RAND()*1000000)), 64, 'x') FROM fill;
 $ pkill -9 mariadbd
-$ cargo run -- read --log-file-path data/ib_logfile0
+$ cargo run -- read-redo --log-file-path data/ib_logfile0
 
 Header block: 12288
 Size: 100663296, Capacity: 100651008
@@ -135,7 +160,7 @@ to craft fake redo log file checkpoint use `write`. MariaDB ensures that:
 - file checkpoint LSN is not less than the pages LSN in the tablespaces.
 
 ```
-$ cargo run -- write --log-file-path data/ib_logfile0 --size 100663296 --lsn 8336
+$ cargo run -- write-redo --log-file-path data/ib_logfile0 --size 100663296 --lsn 8336
 
 Writing file checkpoint: [fa, 0, 0, 0, 0, 0, 0, 0, 1, 45, a6, 1, dc, 36, f7, 9c, 0] at pos: 83366 (0x145a6)
 Target header block: 12288

@@ -3,8 +3,12 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use mdbutil::fil0fil::FIL_PAGE_TYPE_FSP_HDR;
 use mdbutil::fil0fil::tablespace_flags_to_string;
+use mdbutil::fsp0fsp::fsp_header_t;
 use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
+use mdbutil::page_buf::PageBuf;
+use mdbutil::tablespace::{MmapTablespaceReader, TablespaceReader};
 use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
 #[derive(Parser)]
@@ -257,10 +261,11 @@ impl ReadTablespaceCommand {
             .ok_or_else(|| anyhow::anyhow!("Tablespace file path not specified"))?;
         let page_size = self.page_size;
 
-        let mmap_reader = mdbutil::tablespace::MmapTablespaceReader::open(file_path, page_size)?;
+        let mmap_reader: MmapTablespaceReader =
+            mdbutil::tablespace::MmapTablespaceReader::open(file_path, page_size)?;
         let num_pages = mmap_reader.mmap().len() / page_size;
 
-        let reader = mmap_reader.reader()?;
+        let reader: TablespaceReader<'_> = mmap_reader.reader()?;
 
         println!(
             "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, flags: {}",
@@ -273,7 +278,13 @@ impl ReadTablespaceCommand {
 
         println!("{}", reader);
 
-        println!("{}", reader.page(0)?);
+        let page: PageBuf<'_> = reader.page(0)?;
+        println!("{}", page);
+
+        if page.page_type == FIL_PAGE_TYPE_FSP_HDR {
+            let fsp_header = fsp_header_t::from_page(&page);
+            println!("FSP header: {fsp_header:#?}");
+        }
 
         Ok(())
     }
