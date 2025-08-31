@@ -6,9 +6,11 @@ use clap::Parser;
 use mdbutil::fil0fil::FIL_PAGE_TYPE_FSP_HDR;
 use mdbutil::fil0fil::tablespace_flags_to_string;
 use mdbutil::fsp0fsp::fsp_header_t;
+use mdbutil::fsp0types::FSP_TRX_SYS_PAGE_NO;
 use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
 use mdbutil::page_buf::PageBuf;
 use mdbutil::tablespace::{MmapTablespaceReader, TablespaceReader};
+use mdbutil::trx0sys::trx_sys_t;
 use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
 #[derive(Parser)]
@@ -284,6 +286,14 @@ impl ReadTablespaceCommand {
         if page.page_type == FIL_PAGE_TYPE_FSP_HDR {
             let fsp_header = fsp_header_t::from_page(&page);
             println!("FSP header: {fsp_header:#?}");
+        }
+
+        if page.space_id == 0 {
+            let page: PageBuf<'_> = reader.page(FSP_TRX_SYS_PAGE_NO)?;
+            println!("{}", page);
+
+            let trx_sys_header = trx_sys_t::from_page(&page);
+            println!("TRX_SYS header: {trx_sys_header:#?}");
         }
 
         Ok(())

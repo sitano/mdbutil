@@ -1,4 +1,5 @@
 use crate::fil0fil;
+use crate::mach;
 use crate::univ;
 
 /** All persistent tablespaces have a smaller fil_space_t::id than this. */
@@ -62,7 +63,15 @@ The file segment header points to the inode describing the file segment. */
 
 /** Data type for file segment header */
 #[allow(non_camel_case_types)]
-pub type fseg_header_t = u8;
+#[derive(Debug, Clone)]
+pub struct fseg_header_t {
+    /// space id of the inode
+    pub space: u32,
+    /// page number of the inode
+    pub page_no: u32,
+    /// byte offset of the inode
+    pub offset: u16,
+}
 
 /// space id of the inode.
 pub const FSEG_HDR_SPACE: u8 = 0;
@@ -75,6 +84,17 @@ pub const FSEG_HDR_OFFSET: u8 = 8;
 
 /// Length of the file system header, in bytes.
 pub const FSEG_HEADER_SIZE: u8 = 10;
+
+impl fseg_header_t {
+    pub fn from_buf(buf: &[u8]) -> Self {
+        assert!(buf.len() >= FSEG_HEADER_SIZE as usize);
+        fseg_header_t {
+            space: mach::mach_read_from_4(&buf[FSEG_HDR_SPACE as usize..]),
+            page_no: mach::mach_read_from_4(&buf[FSEG_HDR_PAGE_NO as usize..]),
+            offset: mach::mach_read_from_2(&buf[FSEG_HDR_OFFSET as usize..]),
+        }
+    }
+}
 
 /* @} */
 

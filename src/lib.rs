@@ -13,6 +13,7 @@ pub mod page0page;
 pub mod page_buf;
 pub mod ring;
 pub mod tablespace;
+pub mod trx0sys;
 pub mod univ;
 pub mod ut0byte;
 pub mod ut0ut;

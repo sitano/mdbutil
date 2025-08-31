@@ -24,6 +24,50 @@ FSP header: fsp_header_t {
     seg_inodes_full: flst_base_node_t { len: 0, first: fil_addr_t { page: 4294967295, boffset: 0 }, last: fil_addr_t { page: 4294967295, boffset: 0 } },
     seg_inodes_free: flst_base_node_t { len: 1, first: fil_addr_t { page: 2, boffset: 38 }, last: fil_addr_t { page: 2, boffset: 38 } },
 }
+PageBuf { space_id: 0, page_no: 5, prev_page: None, next_page: None, page_lsn: 40054, page_type: TrxSys, checksum: 162806086 }
+TRX_SYS header: trx_sys_t {
+    id_store: 0,
+    fseg_header: fseg_header_t {
+        space: 0,
+        page_no: 2,
+        offset: 242,
+    },
+    rsegs: [
+        (space_id: 0, page_no: 6),
+        (space_id: 1, page_no: 3),
+        (space_id: 2, page_no: 3),
+        (space_id: 3, page_no: 3),
+        ...
+        (space_id: 1, page_no: 44),
+        (space_id: 2, page_no: 44),
+        (space_id: 3, page_no: 44),
+    ],
+    wsrep_xid: trx_sys_wsrep_xid_t {
+        magic: 0,
+        format: 0,
+        gtrid_len: 0,
+        bqual_len: 0,
+        xid_data: "00...00",
+    },
+    mysql_log: trx_sys_mysql_log_t {
+        magic: 0,
+        log_offset: 0,
+        name: "",
+    },
+    doublewrite: trx_sys_doublewrite_t {
+        fseg: fseg_header_t {
+            space: 0,
+            page_no: 2,
+            offset: 2738,
+        },
+        magic: 536853855,
+        block1: 64,
+        block2: 128,
+        magic_repeat: 536853855,
+        block1_repeat: 64,
+        block2_repeat: 128,
+    },
+}
 ```
 
 On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).
