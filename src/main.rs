@@ -2,6 +2,8 @@ use std::io::{Seek, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
+
+use mdbutil::fil0fil::tablespace_flags_to_string;
 use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
 use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
@@ -261,16 +263,17 @@ impl ReadTablespaceCommand {
         let reader = mmap_reader.reader()?;
 
         println!(
-            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}",
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, flags: {}",
             file_path.display(),
             mmap_reader.mmap().len(),
             page_size,
-            num_pages
+            num_pages,
+            tablespace_flags_to_string(reader.flags()),
         );
 
         println!("{}", reader);
 
-        println!("{:#?}", reader.page(0)?);
+        println!("{}", reader.page(0)?);
 
         Ok(())
     }

@@ -166,6 +166,56 @@ pub const FIL_PAGE_TYPE_INSTANT: u16 = 18;
 Note: FIL_PAGE_TYPE_INSTANT maps to the same as FIL_PAGE_INDEX. */
 pub const FIL_PAGE_TYPE_LAST: u16 = FIL_PAGE_TYPE_UNKNOWN;
 
+#[allow(non_camel_case_types)]
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum fil_page_type_t {
+    PageCompressedEncrypted = FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED,
+    PageCompressed = FIL_PAGE_PAGE_COMPRESSED,
+    Index = FIL_PAGE_INDEX,
+    RTree = FIL_PAGE_RTREE,
+    UndoLog = FIL_PAGE_UNDO_LOG,
+    Inode = FIL_PAGE_INODE,
+    IbufFreeList = FIL_PAGE_IBUF_FREE_LIST,
+    Allocated = FIL_PAGE_TYPE_ALLOCATED,
+    IbufBitmap = FIL_PAGE_IBUF_BITMAP,
+    Sys = FIL_PAGE_TYPE_SYS,
+    TrxSys = FIL_PAGE_TYPE_TRX_SYS,
+    FspHdr = FIL_PAGE_TYPE_FSP_HDR,
+    Xdes = FIL_PAGE_TYPE_XDES,
+    Blob = FIL_PAGE_TYPE_BLOB,
+    ZBlob = FIL_PAGE_TYPE_ZBLOB,
+    ZBlob2 = FIL_PAGE_TYPE_ZBLOB2,
+    Unknown = FIL_PAGE_TYPE_UNKNOWN,
+    Instant = FIL_PAGE_TYPE_INSTANT,
+}
+
+impl From<u16> for fil_page_type_t {
+    fn from(value: u16) -> Self {
+        match value {
+            FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED => fil_page_type_t::PageCompressedEncrypted,
+            FIL_PAGE_PAGE_COMPRESSED => fil_page_type_t::PageCompressed,
+            FIL_PAGE_INDEX => fil_page_type_t::Index,
+            FIL_PAGE_RTREE => fil_page_type_t::RTree,
+            FIL_PAGE_UNDO_LOG => fil_page_type_t::UndoLog,
+            FIL_PAGE_INODE => fil_page_type_t::Inode,
+            FIL_PAGE_IBUF_FREE_LIST => fil_page_type_t::IbufFreeList,
+            FIL_PAGE_TYPE_ALLOCATED => fil_page_type_t::Allocated,
+            FIL_PAGE_IBUF_BITMAP => fil_page_type_t::IbufBitmap,
+            FIL_PAGE_TYPE_SYS => fil_page_type_t::Sys,
+            FIL_PAGE_TYPE_TRX_SYS => fil_page_type_t::TrxSys,
+            FIL_PAGE_TYPE_FSP_HDR => fil_page_type_t::FspHdr,
+            FIL_PAGE_TYPE_XDES => fil_page_type_t::Xdes,
+            FIL_PAGE_TYPE_BLOB => fil_page_type_t::Blob,
+            FIL_PAGE_TYPE_ZBLOB => fil_page_type_t::ZBlob,
+            FIL_PAGE_TYPE_ZBLOB2 => fil_page_type_t::ZBlob2,
+            FIL_PAGE_TYPE_UNKNOWN => fil_page_type_t::Unknown,
+            FIL_PAGE_TYPE_INSTANT => fil_page_type_t::Instant,
+            _ => fil_page_type_t::Unknown,
+        }
+    }
+}
+
 /** Set in FIL_PAGE_TYPE for full_crc32 pages in page_compressed format.
 If the flag is set, then the following holds for the remaining bits
 of FIL_PAGE_TYPE:
@@ -189,6 +239,7 @@ pub fn is_full_crc32_compressed(flags: u32) -> bool {
     if !full_crc32(flags) {
         return false;
     }
+
     let algo = fsp0types::FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(flags);
     debug_assert!(algo <= fsp0types::PAGE_ALGORITHM_LAST);
     algo != 0
@@ -280,10 +331,12 @@ pub fn physical_size(flags: u32, page_size: usize) -> usize {
 /// Whether the flags are correct in full crc32 format
 pub fn is_fcrc32_valid_flags(flags: u32, page_size: usize) -> bool {
     debug_assert!(flags & fsp0types::FSP_FLAGS_FCRC32_MASK_MARKER != 0);
+
     let page_ssize = physical_size(flags, page_size);
     if page_ssize < 3 || (page_ssize & 8) != 0 {
         return false;
     }
+
     let shifted_flags = flags >> fsp0types::FSP_FLAGS_FCRC32_POS_COMPRESSED_ALGO;
     shifted_flags <= fsp0types::PAGE_ALGORITHM_LAST
 }
@@ -369,4 +422,51 @@ fn fil_page_index_page_check(page: &[u8]) -> bool {
 /// Get the file page type.
 pub fn fil_page_get_type(page: &[u8]) -> u16 {
     mach::mach_read_from_2(&page[FIL_PAGE_TYPE as usize..])
+}
+
+pub fn tablespace_flags_to_string(flags: u32) -> String {
+    let mut parts = Vec::new();
+
+    if full_crc32(flags) {
+        parts.push("FULL_CRC32".to_string());
+
+        let pssize = fsp0types::FSP_FLAGS_FCRC32_GET_PAGE_SSIZE(flags);
+        parts.push(format!("PAGE_SSIZE={}", pssize));
+    } else {
+        let pssize = fsp0types::FSP_FLAGS_GET_PAGE_SSIZE(flags);
+        if pssize != 0 {
+            parts.push(format!("PAGE_SSIZE={}", pssize));
+        }
+
+        let zssize = fsp0types::FSP_FLAGS_GET_ZIP_SSIZE(flags);
+        if zssize != 0 {
+            parts.push(format!("ZIP_SSIZE={}", zssize));
+        }
+    }
+
+    if fsp0types::FSP_FLAGS_HAS_PAGE_COMPRESSION(flags) != 0 {
+        parts.push("COMPRESSION".to_string());
+
+        let algo = fsp0types::FSP_FLAGS_FCRC32_GET_COMPRESSED_ALGO(flags);
+        if algo != 0 {
+            parts.push(format!("COMPRESSION_ALGO={}", algo));
+        }
+    }
+
+    if fsp0types::FSP_FLAGS_HAS_ATOMIC_BLOBS(flags) != 0 {
+        parts.push("ATOMIC_BLOBS".to_string());
+    }
+
+    if fsp0types::FSP_FLAGS_GET_POST_ANTELOPE(flags) != 0 {
+        parts.push("POST_ANTELOPE".to_string());
+    }
+
+    if flags & fsp0types::FSP_FLAGS_MASK_RESERVED != 0 {
+        let reserved = fsp0types::FSP_FLAGS_GET_RESERVED(flags);
+        parts.push(format!("RESERVED={}", reserved));
+    }
+
+    parts.push(format!("RAW=0x{:08X}", flags));
+
+    parts.join("|")
 }

@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::io::Result;
 use std::ops::{Index, RangeFrom, RangeTo};
 
@@ -105,6 +106,14 @@ impl<'a> PageBuf<'a> {
     pub fn corrupted(&self, check_lsn: Option<Lsn>) -> Result<()> {
         buf0buf::buf_page_is_corrupted(self, check_lsn)
     }
+
+    pub fn read_4(&self, offset: usize) -> u32 {
+        mach::mach_read_from_4(&self.buf[offset..])
+    }
+
+    pub fn read_8(&self, offset: usize) -> u64 {
+        mach::mach_read_from_8(&self.buf[offset..])
+    }
 }
 
 impl std::ops::Deref for PageBuf<'_> {
@@ -153,5 +162,29 @@ impl Debug for PageBuf<'_> {
             .field("foot_lsn", &self.foot_lsn)
             .field("flags", &self.flags)
             .finish()
+    }
+}
+
+impl Display for PageBuf<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("PageBuf");
+        s.field("space_id", &self.space_id);
+        s.field("page_no", &self.page_no);
+        let prev_page = if self.prev_page == FIL_NULL {
+            None
+        } else {
+            Some(self.prev_page)
+        };
+        let next_page = if self.next_page == FIL_NULL {
+            None
+        } else {
+            Some(self.next_page)
+        };
+        s.field("prev_page", &prev_page);
+        s.field("next_page", &next_page);
+        s.field("page_lsn", &self.page_lsn);
+        s.field("page_type", &fil0fil::fil_page_type_t::from(self.page_type));
+        s.field("checksum", &self.foot_checksum);
+        s.finish()
     }
 }
