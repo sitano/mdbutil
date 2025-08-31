@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::fsp0types;
 use crate::mach;
 use crate::univ;
@@ -29,6 +31,27 @@ pub struct fil_addr_t {
     pub page: u32,
     /** byte offset within the page */
     pub boffset: u16,
+}
+
+impl fil_addr_t {
+    /// Create a fil_addr_t from a byte slice.
+    /// The slice must be at least FIL_ADDR_SIZE bytes long.
+    pub fn from_buf(buf: &[u8]) -> fil_addr_t {
+        assert!(buf.len() >= FIL_ADDR_SIZE as usize);
+        let page = mach::mach_read_from_4(&buf[0..]);
+        let boffset = mach::mach_read_from_2(&buf[4..]);
+        fil_addr_t { page, boffset }
+    }
+}
+
+impl Debug for fil_addr_t {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "fil_addr_t {{ page: {}, boffset: {} }}",
+            self.page, self.boffset
+        )
+    }
 }
 
 /* The byte offsets on a file page for various variables @{ */

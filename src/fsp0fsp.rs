@@ -125,6 +125,85 @@ pub const FSP_HEADER_SIZE: u32 = 32 + 5 * fut0lst::FLST_BASE_NODE_SIZE;
 pub const FSP_FREE_ADD: u32 = 4;
 /* @} */
 
+#[allow(non_camel_case_types)]
+#[derive(Debug)]
+pub struct fsp_header_t {
+    /// space id
+    pub space_id: u32,
+    /// this field contained a value up to which we know that the
+    /// modifications in the database have been flushed to the file space; not used now
+    pub not_used: u32,
+    /// Current size of the space in pages
+    pub space_pages: u32,
+    /// Minimum page number for which the free list has not been
+    /// initialized: the pages >= this limit are, by definition, free; note that in a single-table
+    /// tablespace where size < 64 pages, this number is 64, i.e., we have initialized the space about
+    /// the first extent, but have not physically allocated those pages to the file
+    pub free_limit: u32,
+    /// fsp_space_t.flags, similar to dict_table_t::flags
+    pub flags: u32,
+    /// number of used pages in the FSP_FREE_FRAG list
+    pub free_frag_pages: u32,
+    /// list of free extents
+    pub free_extens: fut0lst::flst_base_node_t,
+    /// list of partially free extents not belonging to any segment
+    pub free_frag: fut0lst::flst_base_node_t,
+    /// list of full extents not belonging to any segment
+    pub full_frag: fut0lst::flst_base_node_t,
+    /// 8 bytes which give the first unused segment id
+    pub seg_id: u64,
+    /// list of pages containing segment headers, where all the segment inode slots are
+    /// reserved
+    pub seg_inodes_full: fut0lst::flst_base_node_t,
+    /// list of pages containing segment headers, where not all the segment header slots are
+    /// reserved
+    pub seg_inodes_free: fut0lst::flst_base_node_t,
+}
+
+impl fsp_header_t {
+    /// Reads a space header from the given buffer.
+    /// The buffer must be at least `FSP_HEADER_SIZE` bytes long.
+    pub fn from_page(buf: &[u8]) -> fsp_header_t {
+        assert!(buf.len() >= (FSP_HEADER_OFFSET + FSP_HEADER_SIZE) as usize);
+        fsp_header_t::from_buf(&buf[FSP_HEADER_OFFSET as usize..])
+    }
+
+    /// Reads a space header from the given buffer.
+    /// The buffer must be at least `FSP_HEADER_SIZE` bytes long.
+    pub fn from_buf(buf: &[u8]) -> fsp_header_t {
+        assert!(buf.len() >= FSP_HEADER_SIZE as usize);
+        let space_id = crate::mach::mach_read_from_4(&buf[FSP_SPACE_ID as usize..]); // 0
+        let not_used = crate::mach::mach_read_from_4(&buf[FSP_NOT_USED as usize..]); // 4
+        let space_pages = crate::mach::mach_read_from_4(&buf[FSP_SIZE as usize..]); // 8
+        let free_limit = crate::mach::mach_read_from_4(&buf[FSP_FREE_LIMIT as usize..]); // 12
+        let flags = crate::mach::mach_read_from_4(&buf[FSP_SPACE_FLAGS as usize..]); // 16
+        let free_frag_pages = crate::mach::mach_read_from_4(&buf[FSP_FRAG_N_USED as usize..]); // 20
+        let free_extens = fut0lst::flst_base_node_t::from_buf(&buf[FSP_FREE as usize..]);
+        let free_frag = fut0lst::flst_base_node_t::from_buf(&buf[FSP_FREE_FRAG as usize..]);
+        let full_frag = fut0lst::flst_base_node_t::from_buf(&buf[FSP_FULL_FRAG as usize..]);
+        let seg_id = crate::mach::mach_read_from_8(&buf[FSP_SEG_ID as usize..]);
+        let seg_inodes_full =
+            fut0lst::flst_base_node_t::from_buf(&buf[FSP_SEG_INODES_FULL as usize..]);
+        let seg_inodes_free =
+            fut0lst::flst_base_node_t::from_buf(&buf[FSP_SEG_INODES_FREE as usize..]);
+
+        fsp_header_t {
+            space_id,
+            not_used,
+            space_pages,
+            free_limit,
+            flags,
+            free_frag_pages,
+            free_extens,
+            free_frag,
+            full_frag,
+            seg_id,
+            seg_inodes_full,
+            seg_inodes_free,
+        }
+    }
+}
+
 /* @defgroup File Segment Inode Constants (moved from fsp0fsp.c) @{ */
 
 /*			FILE SEGMENT INODE

@@ -12,12 +12,12 @@ use crate::Lsn;
 // TODO: support for compression and encryption
 #[derive(Clone)]
 pub struct PageBuf<'a> {
-    space_id: u32,
-    page_no: u32,
+    pub space_id: u32,
+    pub page_no: u32,
 
-    prev_page: u32,
-    next_page: u32,
-    page_lsn: Lsn,
+    pub prev_page: u32,
+    pub next_page: u32,
+    pub page_lsn: Lsn,
 
     /// The contents of this field can only be trusted in the following case: if the page
     /// is an uncompressed B-tree index page, then it is guaranteed that the value is
@@ -25,13 +25,13 @@ pub struct PageBuf<'a> {
     ///
     /// In tablespaces created by MySQL/InnoDB 5.1.7 or later, the contents of this field is valid
     /// for all uncompressed pages.
-    page_type: u16,
+    pub page_type: u16,
 
     // if flags has no FSP_FLAGS_FCRC32_MASK_MARKER is not a checksum.
     // see buf0buf::buf_page_is_corrupted().
-    head_checksum: u32,
-    foot_checksum: u32,
-    foot_lsn: u32,
+    pub head_checksum: u32,
+    pub foot_checksum: u32,
+    pub foot_lsn: u32,
 
     // tablespace flags
     flags: u32,
