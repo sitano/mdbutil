@@ -2,16 +2,48 @@ use std::io::{Error, ErrorKind, Result};
 
 use crc32c::crc32c;
 
-use crate::Lsn;
 use crate::fil0fil;
 use crate::mach;
+
+use crate::Lsn;
+use crate::log::FIRST_LSN;
 use crate::page_buf::PageBuf;
+
+/// Check whether a page is newer than the durable LSN.
+/// Returns whether the FIL_PAGE_LSN is invalid (ahead of the durable LSN).
+/// Reference: buf0buf.cc:buf_page_check_lsn().
+pub fn buf_page_check_lsn(page: &PageBuf, current_lsn: Lsn) -> Result<()> {
+    // A page may not be read before it is written, and it may not be
+    // written before the corresponding log has been durably written.
+    // Hence, we refer to the current durable LSN here.
+    if current_lsn == FIRST_LSN {
+        return Ok(());
+    }
+
+    let page_lsn = page.read_8(fil0fil::FIL_PAGE_LSN as usize) as Lsn;
+
+    if current_lsn >= page_lsn {
+        return Ok(());
+    }
+
+    let space_id = page.read_4(fil0fil::FIL_PAGE_SPACE_ID as usize);
+    let page_no = page.read_4(fil0fil::FIL_PAGE_OFFSET as usize);
+
+    Err(Error::new(
+        ErrorKind::InvalidData,
+        format!(
+            "InnoDB: Page [page id: space={}, page number={}] log sequence number {} is in the future! Current system log sequence number {}.",
+            space_id, page_no, page_lsn, current_lsn
+        ),
+    ))
+}
 
 /// Check whether a page is corrupted.
 /// Reference: buf0buf.cc:buf_page_is_corrupted().
-pub fn buf_page_is_corrupted(page: &PageBuf, _check_lsn: Option<Lsn>) -> Result<()> {
+#[allow(clippy::assertions_on_constants)]
+pub fn buf_page_is_corrupted(page: &PageBuf, check_lsn: Option<Lsn>) -> Result<()> {
     if fil0fil::full_crc32(page.flags()) {
-        let (page_size, _compressed, corrupted) = buf_page_full_crc32_size(page);
+        let (page_size, compressed, corrupted) = buf_page_full_crc32_size(page);
         if corrupted {
             return Err(Error::new(
                 ErrorKind::InvalidData,
@@ -36,28 +68,33 @@ pub fn buf_page_is_corrupted(page: &PageBuf, _check_lsn: Option<Lsn>) -> Result<
             ));
         }
 
-        /*
-        static_assert(FIL_PAGE_FCRC32_KEY_VERSION == 0, "alignment");
-        static_assert(FIL_PAGE_LSN % 4 == 0, "alignment");
-        static_assert(FIL_PAGE_FCRC32_END_LSN % 4 == 0, "alignment");
-        if (!compressed
-            && !mach_read_from_4(FIL_PAGE_FCRC32_KEY_VERSION
-               + read_buf)
-            && memcmp_aligned<4>(read_buf + (FIL_PAGE_LSN + 4),
-               end - (FIL_PAGE_FCRC32_END_LSN
-                - FIL_PAGE_FCRC32_CHECKSUM),
-               4)) {
-          return CORRUPTED_OTHER;
+        debug_assert!(fil0fil::FIL_PAGE_FCRC32_KEY_VERSION == 0, "alignment");
+        debug_assert!(fil0fil::FIL_PAGE_LSN.is_multiple_of(4), "alignment");
+        debug_assert!(
+            fil0fil::FIL_PAGE_FCRC32_END_LSN.is_multiple_of(4),
+            "alignment"
+        );
+
+        // Verify LSN low 4 bytes match between header and footer.
+        if !compressed
+            && page.read_4(fil0fil::FIL_PAGE_FCRC32_KEY_VERSION as usize) == 0
+            && page.read_4(fil0fil::FIL_PAGE_LSN as usize + 4)
+                != page.read_4(page_size - fil0fil::FIL_PAGE_FCRC32_END_LSN as usize)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "InnoDB: Page is corrupted (other) (full CRC32 LSN mismatch)",
+            ));
         }
 
-        return
-        #ifndef UNIV_INNOCHECKSUM
-              buf_page_check_lsn(check_lsn, read_buf)
-              ? CORRUPTED_FUTURE_LSN :
-        #endif
-              NOT_CORRUPTED;
-        */
+        if let Some(current_lsn) = check_lsn {
+            buf_page_check_lsn(page, current_lsn)?;
+        }
+
+        return Ok(());
     }
+
+    todo!("Implement buf_page_is_corrupted for non-full_crc32 pages");
 
     /*
       const ulint zip_size = fil_space_t::zip_size(fsp_flags);
@@ -210,8 +247,6 @@ pub fn buf_page_is_corrupted(page: &PageBuf, _check_lsn: Option<Lsn>) -> Result<
     #endif /* !UNIV_INNOCHECKSUM */
       goto check_lsn;
     */
-
-    Ok(())
 }
 
 /// Get the compressed or uncompressed size of a full_crc32 page.
