@@ -47,6 +47,10 @@ impl flst_node_t {
 
 impl Debug for flst_base_node_t {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.len == 0 {
+            return write!(f, "flst_base_node_t {{ len: 0 }}");
+        }
+
         write!(
             f,
             "flst_base_node_t {{ len: {}, first: {:?}, last: {:?} }}",

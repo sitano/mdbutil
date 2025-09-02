@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::fil0fil;
 use crate::mach;
 use crate::univ;
@@ -63,7 +65,7 @@ The file segment header points to the inode describing the file segment. */
 
 /** Data type for file segment header */
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct fseg_header_t {
     /// space id of the inode
     pub space: u32,
@@ -93,6 +95,16 @@ impl fseg_header_t {
             page_no: mach::mach_read_from_4(&buf[FSEG_HDR_PAGE_NO as usize..]),
             offset: mach::mach_read_from_2(&buf[FSEG_HDR_OFFSET as usize..]),
         }
+    }
+}
+
+impl Debug for fseg_header_t {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "fseg_header_t {{ space: {}, page_no: {}, offset: {} }}",
+            self.space, self.page_no, self.offset
+        )
     }
 }
 

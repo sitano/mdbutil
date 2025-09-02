@@ -95,7 +95,7 @@ pub struct trx_rseg_t {
     pub history: fut0lst::flst_base_node_t,
     pub fseg_header: fsp0types::fseg_header_t,
     pub undo_slots: HashMap<u32, u32>, // slot number -> page number
-    pub max_trx_id: u32,
+    pub max_trx_id: u64,
     pub mysql_log: Option<mysql_log_t>,
     pub wsrep_xid: Option<wsrep::wsrep_xid_t>,
 }
@@ -131,11 +131,9 @@ impl trx_rseg_t {
         }
 
         let max_trx_id_offset = TRX_RSEG_MAX_TRX_ID(page_size) as usize;
-        let max_trx_id = mach::mach_read_from_4(&buf[max_trx_id_offset..]);
+        let max_trx_id = mach::mach_read_from_8(&buf[max_trx_id_offset..]);
 
-        let mysql_log = mysql_log_t_from_trx_rseg_buf(
-            &buf[max_trx_id_offset + TRX_RSEG_BINLOG_OFFSET as usize..],
-        );
+        let mysql_log = mysql_log_t_from_trx_rseg_buf(&buf[max_trx_id_offset..]);
         let wsrep_xid = wsrep_xid_t_from_trx_rseg_buf(
             &buf[max_trx_id_offset + TRX_RSEG_WSREP_XID_INFO as usize..],
         );

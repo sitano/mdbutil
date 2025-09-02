@@ -6,22 +6,22 @@ On Undo Log structure [link](https://sitano.github.io/mariadb/innodb/undolog/rec
 Read tablespace:
 
 ```
-$ cargo run read-tablespace --file-path ./undo003
-Opened tablespace file: ./undo003 with size: 10485760 bytes, page size: 16384 bytes, num pages: 640, flags: FULL_CRC32|PAGE_SSIZE=5|POST_ANTELOPE|RAW=0x00000015
-Tablespace(space_id=3, flags=0x15, page_size=16384, order=0)
-PageBuf { space_id: 3, page_no: 0, prev_page: None, next_page: None, page_lsn: 81355, page_type: FspHdr, checksum: 1539327498 }
+$ cargo run read-tablespace --file-path ./ibdata1 --undo-log-dir ./
+Opened tablespace file: ./ibdata1 with size: 12582912 bytes, page size: 16384 bytes, num pages: 768, flags: FULL_CRC32|PAGE_SSIZE=5|POST_ANTELOPE|RAW=0x00000015
+Tablespace(space_id=0, flags=0x15, page_size=16384, order=0)
+PageBuf { space_id: 0, page_no: 0, prev_page: None, next_page: None, page_lsn: 44158, page_type: FspHdr, checksum: 1379061894 }
 FSP header: fsp_header_t {
-    space_id: 3,
+    space_id: 0,
     not_used: 0,
-    space_pages: 640,
+    space_pages: 768,
     free_limit: 320,
     flags: 21,
-    free_frag_pages: 45,
-    free_extens: flst_base_node_t { len: 4, first: fil_addr_t { page: 0, boffset: 198 }, last: fil_addr_t { page: 0, boffset: 318 } },
+    free_frag_pages: 50,
+    free_extens: flst_base_node_t { len: 2, first: fil_addr_t { page: 0, boffset: 278 }, last: fil_addr_t { page: 0, boffset: 318 } },
     free_frag: flst_base_node_t { len: 1, first: fil_addr_t { page: 0, boffset: 158 }, last: fil_addr_t { page: 0, boffset: 158 } },
-    full_frag: flst_base_node_t { len: 0, first: fil_addr_t { page: 4294967295, boffset: 0 }, last: fil_addr_t { page: 4294967295, boffset: 0 } },
-    seg_id: 47,
-    seg_inodes_full: flst_base_node_t { len: 0, first: fil_addr_t { page: 4294967295, boffset: 0 }, last: fil_addr_t { page: 4294967295, boffset: 0 } },
+    full_frag: flst_base_node_t { len: 0 },
+    seg_id: 26,
+    seg_inodes_full: flst_base_node_t { len: 0 },
     seg_inodes_free: flst_base_node_t { len: 1, first: fil_addr_t { page: 2, boffset: 38 }, last: fil_addr_t { page: 2, boffset: 38 } },
 }
 PageBuf { space_id: 0, page_no: 5, prev_page: None, next_page: None, page_lsn: 40054, page_type: TrxSys, checksum: 162806086 }
@@ -42,18 +42,8 @@ TRX_SYS header: trx_sys_t {
         (space_id: 2, page_no: 44),
         (space_id: 3, page_no: 44),
     ],
-    wsrep_xid: trx_sys_wsrep_xid_t {
-        magic: 0,
-        format: 0,
-        gtrid_len: 0,
-        bqual_len: 0,
-        xid_data: "00...00",
-    },
-    mysql_log: trx_sys_mysql_log_t {
-        magic: 0,
-        log_offset: 0,
-        name: "",
-    },
+    wsrep_xid: None,
+    mysql_log: None,
     doublewrite: trx_sys_doublewrite_t {
         fseg: fseg_header_t {
             space: 0,
@@ -68,6 +58,27 @@ TRX_SYS header: trx_sys_t {
         block2_repeat: 128,
     },
 }
+RSEG page: PageBuf { space_id: 0, page_no: 6, prev_page: None, next_page: None, page_lsn: 269027095, page_type: Sys, checksum: 3066088388 }
+RSEG page: PageBuf { space_id: 1, page_no: 3, prev_page: None, next_page: None, page_lsn: 66000, page_type: Sys, checksum: 2212095732 }
+trx_rseg_t { max_trx_id: 12 }
+...
+RSEG page: PageBuf { space_id: 1, page_no: 6, prev_page: None, next_page: None, page_lsn: 76648, page_type: Sys, checksum: 2692835315 }
+trx_rseg_t {
+    format: 0,
+    history_size: 0,
+    history: flst_base_node_t { len: 0 },
+    fseg_header: fseg_header_t { space: 1, page_no: 2, offset: 626 },
+    undo_slots: [],
+    max_trx_id: 44,
+    mysql_log: Some(
+        mysql_log_t {
+            log_offset: 7441,
+            log_name: "/.../binlog.000001",
+        },
+    ),
+    wsrep_xid: None,
+}
+...
 ```
 
 On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).

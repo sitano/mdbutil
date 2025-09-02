@@ -50,7 +50,7 @@ struct ReadTablespaceCommand {
         help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)",
         group = "redo_log_file_path"
     )]
-    pub file_path: Option<PathBuf>,
+    pub file_path: PathBuf,
 
     #[clap(
         long = "page-size",
@@ -58,6 +58,12 @@ struct ReadTablespaceCommand {
         default_value = "16384"
     )]
     pub page_size: usize,
+
+    #[clap(
+        long = "undo-log-dir",
+        help = "Path to the undo logs directory (Undo Log)"
+    )]
+    pub undo_log_dir: Option<PathBuf>,
 }
 
 fn main() {
@@ -259,10 +265,7 @@ impl WriteRedoCommand {
 
 impl ReadTablespaceCommand {
     fn run(&self) -> anyhow::Result<()> {
-        let file_path = self
-            .file_path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Tablespace file path not specified"))?;
+        let file_path = &self.file_path;
         let page_size = self.page_size;
 
         let mmap_reader: MmapTablespaceReader =
@@ -308,25 +311,25 @@ impl ReadTablespaceCommand {
         let trx_sys_header = trx_sys_t::from_page(&page);
         println!("{trx_sys_header:#?}");
 
+        let undo_log_dir = self.undo_log_dir()?;
+
         for trx_sys_rseg_t { space_id, page_no } in trx_sys_header.rsegs {
-            let reader = if space_id == reader.space_id() {
-                reader
-            } else {
-                todo!("Implement reading from other tablespaces, space_id={space_id}");
-                // let path = self
-                //     .file_path
-                //     .as_ref()
-                //     .ok_or_else(|| anyhow::anyhow!("Tablespace file path not specified"))?;
-                // let mut new_path = path.to_path_buf();
-                // new_path.set_file_name(format!("undo{}", space_id - 1));
-                // let mmap_reader: MmapTablespaceReader =
-                //     mdbutil::tablespace::MmapTablespaceReader::open(&new_path, self.page_size)?;
-                // mmap_reader.reader()?
-            };
+            if space_id == reader.space_id() {
+                let page: PageBuf<'_> = reader.page(page_no)?;
+
+                self.read_sys_page(reader, &page)?;
+
+                continue;
+            }
+
+            let new_path = undo_log_dir.join(format!("undo{:03}", space_id));
+
+            let mmap_reader: MmapTablespaceReader =
+                mdbutil::tablespace::MmapTablespaceReader::open(&new_path, self.page_size)?;
+            let reader = mmap_reader.reader()?;
 
             let page: PageBuf<'_> = reader.page(page_no)?;
-
-            self.read_sys_page(reader, &page)?;
+            self.read_sys_page(&reader, &page)?;
         }
 
         Ok(())
@@ -342,8 +345,33 @@ impl ReadTablespaceCommand {
         println!("RSEG page: {}", page);
 
         let rseg = trx_rseg_t::from_page(page);
+
+        if rseg.history_size == 0
+            && rseg.undo_slots.is_empty()
+            && rseg.mysql_log.is_none()
+        {
+            if rseg.max_trx_id != 0 {
+                println!("trx_rseg_t {{ max_trx_id: {} }}", rseg.max_trx_id);
+                return Ok(());
+            }
+
+            return Ok(());
+        }
+
         println!("{rseg:#?}");
 
         Ok(())
+    }
+
+    pub fn undo_log_dir(&self) -> anyhow::Result<PathBuf> {
+        if let Some(path) = &self.undo_log_dir {
+            return Ok(path.clone());
+        }
+
+        if let Some(path) = self.file_path.parent() {
+            return Ok(path.to_path_buf());
+        }
+
+        Err(anyhow::anyhow!("Undo log directory not specified"))
     }
 }
