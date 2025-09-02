@@ -3,13 +3,15 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use mdbutil::fil0fil::FIL_PAGE_TYPE_FSP_HDR;
 use mdbutil::fil0fil::tablespace_flags_to_string;
+use mdbutil::fil0fil::{FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS};
 use mdbutil::fsp0fsp::fsp_header_t;
 use mdbutil::fsp0types::FSP_TRX_SYS_PAGE_NO;
 use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
 use mdbutil::page_buf::PageBuf;
 use mdbutil::tablespace::{MmapTablespaceReader, TablespaceReader};
+use mdbutil::trx0rseg::trx_rseg_t;
+use mdbutil::trx0sys::trx_sys_rseg_t;
 use mdbutil::trx0sys::trx_sys_t;
 use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
@@ -289,12 +291,58 @@ impl ReadTablespaceCommand {
         }
 
         if page.space_id == 0 {
-            let page: PageBuf<'_> = reader.page(FSP_TRX_SYS_PAGE_NO)?;
-            println!("{}", page);
-
-            let trx_sys_header = trx_sys_t::from_page(&page);
-            println!("TRX_SYS header: {trx_sys_header:#?}");
+            self.read_trx_sys_page(&reader)?;
         }
+
+        Ok(())
+    }
+
+    pub fn read_trx_sys_page(&self, reader: &TablespaceReader<'_>) -> anyhow::Result<()> {
+        assert_eq!(reader.space_id(), 0);
+
+        let page: PageBuf<'_> = reader.page(FSP_TRX_SYS_PAGE_NO)?;
+        println!("{}", page);
+
+        assert!(page.page_type == FIL_PAGE_TYPE_TRX_SYS);
+
+        let trx_sys_header = trx_sys_t::from_page(&page);
+        println!("{trx_sys_header:#?}");
+
+        for trx_sys_rseg_t { space_id, page_no } in trx_sys_header.rsegs {
+            let reader = if space_id == reader.space_id() {
+                reader
+            } else {
+                todo!("Implement reading from other tablespaces, space_id={space_id}");
+                // let path = self
+                //     .file_path
+                //     .as_ref()
+                //     .ok_or_else(|| anyhow::anyhow!("Tablespace file path not specified"))?;
+                // let mut new_path = path.to_path_buf();
+                // new_path.set_file_name(format!("undo{}", space_id - 1));
+                // let mmap_reader: MmapTablespaceReader =
+                //     mdbutil::tablespace::MmapTablespaceReader::open(&new_path, self.page_size)?;
+                // mmap_reader.reader()?
+            };
+
+            let page: PageBuf<'_> = reader.page(page_no)?;
+
+            self.read_sys_page(reader, &page)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn read_sys_page(
+        &self,
+        _reader: &TablespaceReader<'_>,
+        page: &PageBuf,
+    ) -> anyhow::Result<()> {
+        assert_eq!(page.page_type, FIL_PAGE_TYPE_SYS);
+
+        println!("RSEG page: {}", page);
+
+        let rseg = trx_rseg_t::from_page(page);
+        println!("{rseg:#?}");
 
         Ok(())
     }

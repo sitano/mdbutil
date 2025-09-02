@@ -13,10 +13,12 @@ pub mod page0page;
 pub mod page_buf;
 pub mod ring;
 pub mod tablespace;
+pub mod trx0rseg;
 pub mod trx0sys;
 pub mod univ;
 pub mod ut0byte;
 pub mod ut0ut;
+pub mod wsrep;
 
 // Type (lsn_t) used for all log sequence number storage and arithmetics.
 pub type Lsn = u64;

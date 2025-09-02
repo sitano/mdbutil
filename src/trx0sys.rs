@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use crate::fsp0types;
 use crate::mach;
+use crate::wsrep;
 
 // The offset of the transaction system header on the page
 pub const TRX_SYS: u32 = fsp0types::FSEG_PAGE_DATA;
@@ -101,23 +102,11 @@ pub fn TRX_SYS_WSREP_XID_INFO(page_size: usize) -> u32 {
 pub const TRX_SYS_WSREP_XID_MAGIC_N_FLD: u32 = 0;
 pub const TRX_SYS_WSREP_XID_MAGIC_N: u32 = 0x7773_7265;
 // XID field: formatID, gtrid_len, bqual_len, xid_data.
-pub const TRX_SYS_WSREP_XID_LEN: u32 = 4 + 4 + 4 + XIDDATASIZE;
+pub const TRX_SYS_WSREP_XID_LEN: u32 = 4 + 4 + 4 + wsrep::XIDDATASIZE;
 pub const TRX_SYS_WSREP_XID_FORMAT: u32 = 4;
 pub const TRX_SYS_WSREP_XID_GTRID_LEN: u32 = 8;
 pub const TRX_SYS_WSREP_XID_BQUAL_LEN: u32 = 12;
 pub const TRX_SYS_WSREP_XID_DATA: u32 = 16;
-
-// Reference: sql/handler.h
-pub const XIDDATASIZE: u32 = MYSQL_XIDDATASIZE;
-//  struct st_mysql_xid is binary compatible with the XID structure as
-//  in the X/Open CAE Specification, Distributed Transaction Processing:
-//  The XA Specification, X/Open Company Ltd., 1991.
-//  http://www.opengroup.org/bookstore/catalog/c193.htm
-//
-//  @see XID in sql/handler.h
-//
-//  Reference: include/mysql/plugin.h
-pub const MYSQL_XIDDATASIZE: u32 = 128;
 
 // Doublewrite buffer
 //
@@ -133,29 +122,17 @@ pub struct trx_sys_t {
     pub id_store: u64,
     pub fseg_header: fsp0types::fseg_header_t,
     pub rsegs: Vec<trx_sys_rseg_t>,
-    pub wsrep_xid: trx_sys_wsrep_xid_t,
-    pub mysql_log: trx_sys_mysql_log_t,
+    pub wsrep_xid: Option<wsrep::wsrep_xid_t>,
+    pub mysql_log: Option<mysql_log_t>,
     pub doublewrite: trx_sys_doublewrite_t,
-}
-
-/// WSREP XID info structure stored in the trx_sys_t header.
-#[allow(non_camel_case_types)]
-#[derive(Clone)]
-pub struct trx_sys_wsrep_xid_t {
-    pub magic: u32,
-    pub format: u32,
-    pub gtrid_len: u32,
-    pub bqual_len: u32,
-    pub xid_data: [u8; XIDDATASIZE as usize],
 }
 
 /// MariaDB binlog info structure stored in the trx_sys_t header.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
-pub struct trx_sys_mysql_log_t {
-    pub magic: u32,
+pub struct mysql_log_t {
     pub log_offset: u64,
-    pub name: String,
+    pub log_name: String,
 }
 
 /// Doublewrite buffer info structure stored in the trx_sys_t header.
@@ -203,56 +180,43 @@ impl Debug for trx_sys_rseg_t {
     }
 }
 
-impl trx_sys_wsrep_xid_t {
-    pub fn from_buf(buf: &[u8]) -> Self {
-        assert!(buf.len() >= 4 + TRX_SYS_WSREP_XID_LEN as usize);
+pub fn wsrep_xid_t_from_trx_sys_buf(buf: &[u8]) -> Option<wsrep::wsrep_xid_t> {
+    assert!(buf.len() >= 4 + TRX_SYS_WSREP_XID_LEN as usize);
 
-        let magic = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_MAGIC_N_FLD as usize..]);
-        let format = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_FORMAT as usize..]);
-        let gtrid_len = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_GTRID_LEN as usize..]);
-        let bqual_len = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_BQUAL_LEN as usize..]);
-        let mut xid_data = [0u8; XIDDATASIZE as usize];
-        xid_data.copy_from_slice(
-            &buf[TRX_SYS_WSREP_XID_DATA as usize..(TRX_SYS_WSREP_XID_DATA + XIDDATASIZE) as usize],
-        );
-
-        trx_sys_wsrep_xid_t {
-            magic,
-            format,
-            gtrid_len,
-            bqual_len,
-            xid_data,
-        }
+    let magic = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_MAGIC_N_FLD as usize..]);
+    if magic != TRX_SYS_WSREP_XID_MAGIC_N {
+        return None;
     }
+
+    let format = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_FORMAT as usize..]);
+    let gtrid_len = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_GTRID_LEN as usize..]);
+    let bqual_len = mach::mach_read_from_4(&buf[TRX_SYS_WSREP_XID_BQUAL_LEN as usize..]);
+
+    let mut xid_data = [0u8; wsrep::XIDDATASIZE as usize];
+    xid_data.copy_from_slice(
+        &buf[TRX_SYS_WSREP_XID_DATA as usize
+            ..(TRX_SYS_WSREP_XID_DATA + wsrep::XIDDATASIZE) as usize],
+    );
+
+    Some(wsrep::wsrep_xid_t {
+        format,
+        gtrid_len,
+        bqual_len,
+        xid_data,
+    })
 }
 
-impl Debug for trx_sys_wsrep_xid_t {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("trx_sys_wsrep_xid_t")
-            .field("magic", &self.magic)
-            .field("format", &self.format)
-            .field("gtrid_len", &self.gtrid_len)
-            .field("bqual_len", &self.bqual_len)
-            .field(
-                "xid_data",
-                &self
-                    .xid_data
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<String>>()
-                    .join(""),
-            )
-            .finish()
-    }
-}
-
-impl trx_sys_mysql_log_t {
-    pub fn from_buf(buf: &[u8]) -> Self {
+impl mysql_log_t {
+    pub fn from_trx_sys_buf(buf: &[u8]) -> Option<Self> {
         let magic = mach::mach_read_from_4(&buf[TRX_SYS_MYSQL_LOG_MAGIC_N_FLD..]);
+        if magic != TRX_SYS_MYSQL_LOG_MAGIC_N {
+            return None;
+        }
+
         let log_offset = mach::mach_read_from_8(&buf[TRX_SYS_MYSQL_LOG_OFFSET..]);
         let name_bytes =
             &buf[TRX_SYS_MYSQL_LOG_NAME..(TRX_SYS_MYSQL_LOG_NAME + TRX_SYS_MYSQL_LOG_NAME_LEN)];
-        let name = String::from_utf8_lossy(
+        let log_name = String::from_utf8_lossy(
             &name_bytes
                 .iter()
                 .cloned()
@@ -261,11 +225,10 @@ impl trx_sys_mysql_log_t {
         )
         .to_string();
 
-        trx_sys_mysql_log_t {
-            magic,
+        Some(mysql_log_t {
             log_offset,
-            name,
-        }
+            log_name,
+        })
     }
 }
 
@@ -324,8 +287,8 @@ impl trx_sys_t {
             id_store,
             fseg_header,
             rsegs,
-            wsrep_xid: trx_sys_wsrep_xid_t::from_buf(wsrep_xid_buf),
-            mysql_log: trx_sys_mysql_log_t::from_buf(mysql_log_buf),
+            wsrep_xid: wsrep_xid_t_from_trx_sys_buf(wsrep_xid_buf),
+            mysql_log: mysql_log_t::from_trx_sys_buf(mysql_log_buf),
             doublewrite: trx_sys_doublewrite_t::from_buf(doublewrite_buf),
         }
     }
