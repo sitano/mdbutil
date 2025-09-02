@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use mdbutil::fil0fil::tablespace_flags_to_string;
-use mdbutil::fil0fil::{FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS};
+use mdbutil::fil0fil::{
+    FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS, FIL_PAGE_UNDO_LOG,
+};
 use mdbutil::fsp0fsp::fsp_header_t;
 use mdbutil::fsp0types::FSP_TRX_SYS_PAGE_NO;
 use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
@@ -13,6 +15,7 @@ use mdbutil::tablespace::{MmapTablespaceReader, TablespaceReader};
 use mdbutil::trx0rseg::trx_rseg_t;
 use mdbutil::trx0sys::trx_sys_rseg_t;
 use mdbutil::trx0sys::trx_sys_t;
+use mdbutil::trx0undo::trx_undo_page_t;
 use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
 #[derive(Parser)]
@@ -337,7 +340,7 @@ impl ReadTablespaceCommand {
 
     pub fn read_sys_page(
         &self,
-        _reader: &TablespaceReader<'_>,
+        reader: &TablespaceReader<'_>,
         page: &PageBuf,
     ) -> anyhow::Result<()> {
         assert_eq!(page.page_type, FIL_PAGE_TYPE_SYS);
@@ -346,10 +349,7 @@ impl ReadTablespaceCommand {
 
         let rseg = trx_rseg_t::from_page(page);
 
-        if rseg.history_size == 0
-            && rseg.undo_slots.is_empty()
-            && rseg.mysql_log.is_none()
-        {
+        if rseg.history_size == 0 && rseg.undo_slots.is_empty() && rseg.mysql_log.is_none() {
             if rseg.max_trx_id != 0 {
                 println!("trx_rseg_t {{ max_trx_id: {} }}", rseg.max_trx_id);
                 return Ok(());
@@ -359,6 +359,12 @@ impl ReadTablespaceCommand {
         }
 
         println!("{rseg:#?}");
+
+        for (slot, page_no) in &rseg.undo_slots {
+            let page: PageBuf<'_> = reader.page(*page_no)?;
+
+            self.read_undo_page(reader, *slot, &page)?;
+        }
 
         Ok(())
     }
@@ -373,5 +379,21 @@ impl ReadTablespaceCommand {
         }
 
         Err(anyhow::anyhow!("Undo log directory not specified"))
+    }
+
+    pub fn read_undo_page(
+        &self,
+        _reader: &TablespaceReader<'_>,
+        slot: u32,
+        page: &PageBuf,
+    ) -> anyhow::Result<()> {
+        assert_eq!(page.page_type, FIL_PAGE_UNDO_LOG);
+
+        println!("UNDO page (ref by slot {slot}): {}", page);
+
+        let undo_page = trx_undo_page_t::from_page(page);
+        println!("{undo_page:#?}");
+
+        Ok(())
     }
 }

@@ -15,6 +15,7 @@ pub mod ring;
 pub mod tablespace;
 pub mod trx0rseg;
 pub mod trx0sys;
+pub mod trx0undo;
 pub mod univ;
 pub mod ut0byte;
 pub mod ut0ut;

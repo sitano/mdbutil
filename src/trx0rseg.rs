@@ -211,7 +211,7 @@ impl Debug for trx_rseg_t {
             .undo_slots
             .iter()
             .filter(|(_slot, page)| **page < 0xFFFFFFFF)
-            .map(|(s, p)| (*s, *p))
+            .map(|(s, p)| UndoSlotPrinter(*s, *p))
             .collect::<Vec<_>>();
 
         let mut s = f.debug_struct("trx_rseg_t");
@@ -224,5 +224,13 @@ impl Debug for trx_rseg_t {
         s.field("mysql_log", &self.mysql_log);
         s.field("wsrep_xid", &self.wsrep_xid);
         s.finish()
+    }
+}
+
+pub struct UndoSlotPrinter(u32, u32); // slot number, page number
+
+impl Debug for UndoSlotPrinter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} -> {})", self.0, self.1)
     }
 }

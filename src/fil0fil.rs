@@ -46,6 +46,10 @@ impl fil_addr_t {
 
 impl Debug for fil_addr_t {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.page == FIL_NULL {
+            return write!(f, "None");
+        }
+
         write!(
             f,
             "fil_addr_t {{ page: {}, boffset: {} }}",

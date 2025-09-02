@@ -99,6 +99,20 @@ pub const MAX_DB_UTF8_LEN: u32 = NAME_LEN + 1;
 // mysql_com.h if you are to use this macro.
 // pub const MAX_TABLE_UTF8_LEN	:u32=(NAME_LEN + sizeof(srv_mysql50_table_name_prefix));
 
+/// log2 of the page size (14 for 1<<14 == 16384 bytes).
+pub fn page_size_shift(page_size: u32) -> u32 {
+    match page_size {
+        // 16 is the max ([`UNIV_PAGE_SIZE_SHIFT_MAX`])
+        65536 => 16,
+        32768 => 15,
+        16384 => 14,
+        8192 => 13,
+        4096 => 12,
+        // 12 is the min ([`UNIV_PAGE_SIZE_SHIFT_MIN`])
+        _ => panic!("Invalid page size: {}", page_size),
+    }
+}
+
 /*
             UNIVERSAL TYPE DEFINITIONS
             ==========================
