@@ -208,7 +208,7 @@ pub fn make_undo_log_page(
         ));
     }
 
-    let page_size = fil0fil::logical_size(flags) as usize;
+    let page_size = fil0fil::logical_size(flags);
     assert_eq!(page.len(), page_size);
 
     page.fill(0);
@@ -247,7 +247,7 @@ pub fn make_page_header(
         &mut buf[fil0fil::FIL_PAGE_NEXT as usize..],
         fil0fil::FIL_NULL,
     )?; // 12
-    mach::mach_write_to_8(&mut buf[fil0fil::FIL_PAGE_LSN as usize..], page_lsn as u64)?; // 16
+    mach::mach_write_to_8(&mut buf[fil0fil::FIL_PAGE_LSN as usize..], page_lsn)?; // 16
     mach::mach_write_to_2(&mut buf[fil0fil::FIL_PAGE_TYPE as usize..], page_type)?; // 24
     mach::mach_write_to_4(&mut buf[fil0fil::FIL_PAGE_SPACE_ID as usize..], space_id)?; // 34
 
@@ -269,7 +269,7 @@ pub fn make_undo_log_page_header(buf: &mut [u8]) -> Result<()> {
     )?; // 2, 38 + 6 + 2 * 6 = 56
 
     let mut empty_page_node = fut0lst::flst_node_t::default();
-    empty_page_node.read(
+    empty_page_node.read_exact(
         &mut buf[trx0undo::TRX_UNDO_PAGE_NODE as usize
             ..trx0undo::TRX_UNDO_PAGE_NODE as usize + fut0lst::FLST_NODE_SIZE as usize],
     )?;

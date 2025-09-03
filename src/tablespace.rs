@@ -1,3 +1,5 @@
+#![allow(clippy::len_without_is_empty)]
+
 use std::{
     fmt::Display,
     io::{Error, ErrorKind, Result},
@@ -5,7 +7,7 @@ use std::{
 };
 
 use anyhow::Context;
-use mmap_rs::{Mmap, MmapFlags, MmapOptions};
+use mmap_rs::{Mmap, MmapFlags, MmapMut, MmapOptions};
 
 use crate::{fil0fil, fsp0fsp, fsp0types, mach, page_buf::PageBuf, page0page};
 
@@ -237,6 +239,10 @@ impl<'a> TablespaceReader<'a> {
     pub fn flags(&self) -> u32 {
         self.flags
     }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 pub struct MmapTablespaceReader {
@@ -283,6 +289,10 @@ impl MmapTablespaceReader {
         &self.m
     }
 
+    pub fn len(&self) -> usize {
+        self.m.len()
+    }
+
     pub fn reader(&self) -> anyhow::Result<TablespaceReader<'_>> {
         let mut reader = TablespaceReader::new(self.m.as_slice(), self.page);
 
@@ -304,6 +314,155 @@ impl Display for TablespaceReader<'_> {
             f,
             "Tablespace(space_id={}, flags={:#x}, page_size={}, order={})",
             self.space_id, self.flags, self.page, self.order
+        )
+    }
+}
+
+pub struct MmapTablespaceWriter {
+    m: MmapMut,
+    page: usize,
+}
+
+impl MmapTablespaceWriter {
+    pub fn new(m: MmapMut, page: usize) -> MmapTablespaceWriter {
+        MmapTablespaceWriter { m, page }
+    }
+
+    pub fn open(file_path: &Path, page_size: usize) -> anyhow::Result<MmapTablespaceWriter> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_path)
+            .with_context(|| format!("open log file at {}", file_path.display()))?;
+
+        let meta = file_path
+            .metadata()
+            .context("get metadata for tablespace a file")?;
+        let size = meta.len();
+
+        if page_size == 0 {
+            return Err(anyhow::anyhow!("tablespace file is empty"));
+        }
+
+        if size % page_size as u64 != 0 {
+            return Err(anyhow::anyhow!(
+                "tablespace file size {size} is not a multiple of page size {page_size}",
+            ));
+        }
+
+        let mmap = unsafe {
+            MmapOptions::new(size as usize)
+                .context("mmap option")?
+                .with_file(&file, 0u64)
+                .with_flags(MmapFlags::SHARED)
+                .map_mut()
+                .context("mmap tablespace file")?
+        };
+
+        Ok(MmapTablespaceWriter::new(mmap, page_size))
+    }
+
+    pub fn mmap_mut(&self) -> &MmapMut {
+        &self.m
+    }
+
+    pub fn len(&self) -> usize {
+        self.m.len()
+    }
+
+    pub fn reader(&self) -> anyhow::Result<TablespaceReader<'_>> {
+        let mut reader = TablespaceReader::new(self.m.as_slice(), self.page);
+
+        reader
+            .parse_first_page()
+            .context("parse first page of tablespace")?;
+
+        reader
+            .validate_first_page()
+            .context("validate first page of tablespace")?;
+
+        Ok(reader)
+    }
+
+    pub fn writer(&mut self) -> anyhow::Result<TablespaceWriter<'_>> {
+        let reader = self.reader()?;
+
+        let space_id = reader.space_id();
+        let flags = reader.flags();
+
+        let mut writer = TablespaceWriter::new(self.m.as_mut_slice(), self.page, space_id, flags);
+
+        writer.space_id = space_id;
+        writer.flags = flags;
+
+        Ok(writer)
+    }
+}
+
+#[derive(Debug)]
+pub struct TablespaceWriter<'a> {
+    buf: &'a mut [u8],
+    /// page size, by default 16K.
+    page_size: usize,
+    /// tablespace id
+    space_id: u32,
+    /// tablespace flags
+    flags: u32,
+}
+
+impl<'a> TablespaceWriter<'a> {
+    pub fn new(
+        buf: &'a mut [u8],
+        page_size: usize,
+        space_id: u32,
+        flags: u32,
+    ) -> TablespaceWriter<'a> {
+        TablespaceWriter {
+            buf,
+            page_size,
+            space_id,
+            flags,
+        }
+    }
+
+    pub fn page_buf(&'a mut self, page_no: u32) -> Result<&'a mut [u8]> {
+        let pos = (page_no as usize)
+            .checked_mul(self.page_size)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "page_id overflow"))?;
+
+        if pos + self.page_size > self.buf.len() {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+
+        Ok(&mut self.buf[pos..pos + self.page_size])
+    }
+
+    pub fn mmap_mut(&'a mut self) -> &'a mut [u8] {
+        self.buf
+    }
+
+    pub fn page_size(&self) -> usize {
+        self.page_size
+    }
+
+    pub fn space_id(&self) -> u32 {
+        self.space_id
+    }
+
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+}
+
+impl Display for TablespaceWriter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Tablespace(space_id={}, page_size={}, pages={}, flags={:#x})",
+            self.space_id,
+            self.page_size,
+            self.buf.len() / self.page_size,
+            self.flags,
         )
     }
 }

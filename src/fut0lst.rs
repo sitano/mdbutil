@@ -9,6 +9,7 @@ pub const FLST_BASE_NODE_SIZE: u32 = 4 + 2 * fil0fil::FIL_ADDR_SIZE;
 pub const FLST_NODE_SIZE: u32 = 2 * fil0fil::FIL_ADDR_SIZE;
 
 #[allow(non_camel_case_types)]
+#[derive(Default)]
 pub struct flst_base_node_t {
     pub len: u32,
     pub first: fil0fil::fil_addr_t,
@@ -16,6 +17,7 @@ pub struct flst_base_node_t {
 }
 
 #[allow(non_camel_case_types)]
+#[derive(Default)]
 pub struct flst_node_t {
     pub prev: fil0fil::fil_addr_t,
     pub next: fil0fil::fil_addr_t,
@@ -59,15 +61,6 @@ impl flst_node_t {
     }
 }
 
-impl Default for flst_node_t {
-    fn default() -> Self {
-        flst_node_t {
-            prev: fil0fil::fil_addr_t::default(),
-            next: fil0fil::fil_addr_t::default(),
-        }
-    }
-}
-
 impl Read for flst_node_t {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         assert!(buf.len() >= FLST_NODE_SIZE as usize);
@@ -78,16 +71,6 @@ impl Read for flst_node_t {
             .read(&mut buf[fil0fil::FIL_ADDR_SIZE as usize..])?;
 
         Ok(FLST_NODE_SIZE as usize)
-    }
-}
-
-impl Default for flst_base_node_t {
-    fn default() -> Self {
-        flst_base_node_t {
-            len: 0,
-            first: fil0fil::fil_addr_t::default(),
-            last: fil0fil::fil_addr_t::default(),
-        }
     }
 }
 

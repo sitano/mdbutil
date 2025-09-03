@@ -8,8 +8,8 @@ use mdbutil::{
     Lsn,
     config::Config,
     fil0fil::{
-        FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS, FIL_PAGE_UNDO_LOG,
-        tablespace_flags_to_string,
+        FIL_PAGE_TYPE_ALLOCATED, FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS,
+        FIL_PAGE_UNDO_LOG, tablespace_flags_to_string,
     },
     fsp0fsp::fsp_header_t,
     fsp0types::FSP_TRX_SYS_PAGE_NO,
@@ -19,7 +19,7 @@ use mdbutil::{
     mtr0types::MtrOperation,
     page_buf::PageBuf,
     ring,
-    tablespace::{MmapTablespaceReader, TablespaceReader},
+    tablespace::{MmapTablespaceReader, MmapTablespaceWriter, TablespaceReader},
     trx0rseg::trx_rseg_t,
     trx0sys::{trx_sys_rseg_t, trx_sys_t},
     trx0undo::trx_undo_page_t,
@@ -31,6 +31,7 @@ enum Cli {
     WriteRedo(WriteRedoCommand),
     ReadTablespace(ReadTablespaceCommand),
     ReadPage(ReadPageCommand),
+    CleanUndo(CleanUndoCommand),
 }
 
 #[derive(clap::Args)]
@@ -109,6 +110,24 @@ struct ReadPageCommand {
     pub raw: bool,
 }
 
+/// Command to cleanup an undo log file by rewriting all free undo log pages with zeroes to
+/// ensure it has no user's data.
+#[derive(clap::Args)]
+struct CleanUndoCommand {
+    #[clap(
+        long = "file-path",
+        help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)"
+    )]
+    pub file_path: PathBuf,
+
+    #[clap(
+        long = "page-size",
+        help = "Page size in bytes (default: 16384)",
+        default_value = "16384"
+    )]
+    pub page_size: usize,
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli {
@@ -116,6 +135,7 @@ fn main() {
         Cli::WriteRedo(cmd) => cmd.run().expect("Failed to write redo log"),
         Cli::ReadTablespace(cmd) => cmd.run().expect("Failed to read tablespace"),
         Cli::ReadPage(cmd) => cmd.run().expect("Failed to read page"),
+        Cli::CleanUndo(cmd) => cmd.run().expect("Failed to clean undo log"),
     };
 }
 
@@ -519,6 +539,61 @@ impl ReadPageCommand {
                 return Ok(());
             }
         }
+
+        Ok(())
+    }
+}
+
+impl CleanUndoCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let file_path = &self.file_path;
+        let page_size = self.page_size;
+
+        let mut mmap_writer: MmapTablespaceWriter =
+            MmapTablespaceWriter::open(file_path, page_size)?;
+        let num_pages = mmap_writer.len() / page_size;
+
+        let mut reader: TablespaceReader<'_> = mmap_writer.reader()?;
+
+        println!(
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, \
+             flags: {}",
+            file_path.display(),
+            reader.len(),
+            page_size,
+            num_pages,
+            tablespace_flags_to_string(reader.flags()),
+        );
+
+        let mut trx_rseg_pages = Vec::new();
+        let mut pages = Vec::with_capacity(num_pages);
+        let mut allocated = 0usize;
+
+        // scan pages
+        for page_no in 0..num_pages as u32 {
+            pages.push(0u8);
+
+            let page: PageBuf<'_> = reader.page(page_no)?;
+
+            if page.page_type == FIL_PAGE_UNDO_LOG {
+                pages[page_no as usize] = 1;
+            }
+
+            if page.page_type == FIL_PAGE_TYPE_SYS {
+                trx_rseg_pages.push(page_no);
+            }
+
+            if page.page_type == FIL_PAGE_TYPE_ALLOCATED {
+                allocated += 1;
+            }
+        }
+
+        println!(
+            "Found {} undo log pages, {} allocated pages",
+            pages.iter().filter(|p| **p == 1).count(),
+            allocated,
+        );
+        println!("Found {:?} trx_rseg pages", trx_rseg_pages);
 
         Ok(())
     }
