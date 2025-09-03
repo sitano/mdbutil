@@ -1,9 +1,54 @@
 MariaDB experimental utilities for testing and development purposes.
 ===
 
+Read page
+---
+
+```
+$ cargo run read-page --file-path ./undo002 --page 10
+Opened tablespace file: ./undo002 with size: 17825792 bytes, page size: 16384 bytes, num pages: 1088, flags: FULL_CRC32|PAGE_SSIZE=5|POST_ANTELOPE|RAW=0x00000015
+Tablespace(space_id=2, flags=0x15, page_size=16384, order=0)
+PageBuf { space_id: 2, page_no: 10, prev_page: None, next_page: None, page_lsn: 11787325, page_type: Sys, checksum: 1559159512 }
+trx_rseg_t {
+    format: 0,
+    history_size: 0,
+    history: flst_base_node_t { len: 0 },
+    fseg_header: fseg_header_t { space: 2, page_no: 2, offset: 1394 },
+    undo_slots: [],
+    max_trx_id: 70,
+    mysql_log: None,
+    wsrep_xid: None,
+}
+
+$ cargo run read-page --file-path ./undo002 --page 50
+Opened tablespace file: ./undo002 with size: 17825792 bytes, page size: 16384 bytes, num pages: 1088, flags: FULL_CRC32|PAGE_SSIZE=5|POST_ANTELOPE|RAW=0x00000015
+Tablespace(space_id=2, flags=0x15, page_size=16384, order=0)
+PageBuf { space_id: 2, page_no: 50, prev_page: None, next_page: None, page_lsn: 181119183, page_type: UndoLog, checksum: 4168205373 }
+trx_undo_page_t {
+    page_type: 0,
+    start: 56,
+    free: 15866,
+    node: flst_node_t { prev: fil_addr_t { page: 49, boffset: 44 }, next: fil_addr_t { page: 51, boffset: 44 } },
+}
+
+$ cargo run read-page --file-path ./undo002 --page 50 --hex | head
+00000000: 00 00 00 00 00 00 00 32 ff ff ff ff ff ff ff ff |.......2........|
+00000010: 00 00 00 00 0a cb a8 cf 00 02 00 00 00 00 00 00 |................|
+00000020: 00 00 00 00 00 02 00 00 00 38 3d fa 00 00 00 31 |.........8=....1|
+00000030: 00 2c 00 00 00 33 00 2c 04 56 1c 4b 1b 00 00 00 |.,...3.,.V.K....|
+00000040: 00 00 00 e0 80 00 00 00 00 00 00 04 80 00 00 97 |................|
+00000050: 01 03 84 00 41 41 41 41 41 41 41 41 41 41 41 41 |....AAAAAAAAAAAA| <-- user's data A*
+00000060: 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 |AAAAAAAAAAAAAAAA|
+00000070: 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 |AAAAAAAAAAAAAAAA|
+00000080: 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 |AAAAAAAAAAAAAAAA|
+00000090: 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 |AAAAAAAAAAAAAAAA|
+```
+
+Read tablespace
+---
+
 On Undo Log structure [link](https://sitano.github.io/mariadb/innodb/undolog/recovery/2025/08/08/notes-on-mariadb-undo-log/).
 
-Read tablespace:
 
 ```
 $ cargo run read-tablespace --file-path ./ibdata1 --undo-log-dir ./
@@ -81,9 +126,10 @@ trx_rseg_t {
 ...
 ```
 
-On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).
-
 Redo log parser for 11.8.x:
+---
+
+On Redo Log structure [link](https://sitano.github.io/mariadb/innodb/redolog/recovery/2025/07/07/notes-on-mariadb-redo-log/).
 
 ```
 $ scripts/mariadb-install-db --datadir ./data --innodb-log-file-size=10M

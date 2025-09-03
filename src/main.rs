@@ -23,6 +23,7 @@ enum Cli {
     ReadRedo(ReadRedoCommand),
     WriteRedo(WriteRedoCommand),
     ReadTablespace(ReadTablespaceCommand),
+    ReadPage(ReadPageCommand),
 }
 
 #[derive(clap::Args)]
@@ -50,8 +51,7 @@ struct WriteRedoCommand {
 struct ReadTablespaceCommand {
     #[clap(
         long = "file-path",
-        help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)",
-        group = "redo_log_file_path"
+        help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)"
     )]
     pub file_path: PathBuf,
 
@@ -69,12 +69,46 @@ struct ReadTablespaceCommand {
     pub undo_log_dir: Option<PathBuf>,
 }
 
+#[derive(clap::Args)]
+struct ReadPageCommand {
+    #[clap(
+        long = "file-path",
+        help = "Path to the tablespace file (ibdata1, undoXXX, *.ibd)"
+    )]
+    pub file_path: PathBuf,
+
+    #[clap(
+        long = "page-size",
+        help = "Page size in bytes (default: 16384)",
+        default_value = "16384"
+    )]
+    pub page_size: usize,
+
+    #[clap(
+        long = "page",
+        help = "Page number to read (0-based)",
+        default_value = "0"
+    )]
+    pub page: u32,
+
+    #[clap(
+        long = "hex",
+        help = "Dump page in hex format",
+        default_value_t = false
+    )]
+    pub hex: bool,
+
+    #[clap(long = "raw", help = "Dump raw page data", default_value_t = false)]
+    pub raw: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli {
         Cli::ReadRedo(cmd) => cmd.run(),
         Cli::WriteRedo(cmd) => cmd.run().expect("Failed to write redo log"),
         Cli::ReadTablespace(cmd) => cmd.run().expect("Failed to read tablespace"),
+        Cli::ReadPage(cmd) => cmd.run().expect("Failed to read page"),
     };
 }
 
@@ -393,6 +427,89 @@ impl ReadTablespaceCommand {
 
         let undo_page = trx_undo_page_t::from_page(page);
         println!("{undo_page:#?}");
+
+        Ok(())
+    }
+}
+
+impl ReadPageCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let file_path = &self.file_path;
+        let page_size = self.page_size;
+
+        let mmap_reader: MmapTablespaceReader =
+            mdbutil::tablespace::MmapTablespaceReader::open(file_path, page_size)?;
+        let num_pages = mmap_reader.mmap().len() / page_size;
+
+        let reader: TablespaceReader<'_> = mmap_reader.reader()?;
+        let page: PageBuf<'_> = reader.page(self.page)?;
+
+        if self.hex {
+            // xxd compatible hex dump
+            for (i, chunk) in page.buf().chunks(16).enumerate() {
+                print!("{:08x}: ", i * 16);
+
+                for byte in chunk {
+                    print!("{:02x} ", byte);
+                }
+
+                for _ in 0..(16 - chunk.len()) {
+                    print!("   ");
+                }
+
+                print!("|");
+                for byte in chunk {
+                    if byte.is_ascii_graphic() || *byte == b' ' {
+                        print!("{}", *byte as char);
+                    } else {
+                        print!(".");
+                    }
+                }
+                println!("|");
+            }
+
+            return Ok(());
+        }
+
+        if self.raw {
+            std::io::stdout().write_all(page.buf())?;
+            return Ok(());
+        }
+
+        println!(
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, flags: {}",
+            file_path.display(),
+            mmap_reader.mmap().len(),
+            page_size,
+            num_pages,
+            tablespace_flags_to_string(reader.flags()),
+        );
+
+        println!("{}", reader);
+
+        println!("{}", page);
+
+        match page.page_type {
+            FIL_PAGE_TYPE_FSP_HDR => {
+                let fsp_header = fsp_header_t::from_page(&page);
+                println!("FSP header: {fsp_header:#?}");
+            }
+            FIL_PAGE_TYPE_TRX_SYS => {
+                let trx_sys_header = trx_sys_t::from_page(&page);
+                println!("{trx_sys_header:#?}");
+            }
+            FIL_PAGE_TYPE_SYS => {
+                let rseg = trx_rseg_t::from_page(&page);
+                println!("{rseg:#?}");
+            }
+            FIL_PAGE_UNDO_LOG => {
+                let undo_page = trx_undo_page_t::from_page(&page);
+                println!("{undo_page:#?}");
+            }
+            _ => {
+                return Ok(());
+            }
+        }
 
         Ok(())
     }

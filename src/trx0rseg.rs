@@ -207,12 +207,14 @@ pub fn wsrep_xid_t_from_trx_rseg_buf(buf: &[u8]) -> Option<wsrep::wsrep_xid_t> {
 
 impl Debug for trx_rseg_t {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let slots = self
+        let mut slots = self
             .undo_slots
             .iter()
             .filter(|(_slot, page)| **page < 0xFFFFFFFF)
             .map(|(s, p)| UndoSlotPrinter(*s, *p))
             .collect::<Vec<_>>();
+
+        slots.sort_by_key(|s| s.0);
 
         let mut s = f.debug_struct("trx_rseg_t");
         s.field("format", &self.format);
