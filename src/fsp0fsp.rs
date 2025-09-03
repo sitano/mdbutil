@@ -1,8 +1,4 @@
-use crate::fil0fil;
-use crate::fsp0types;
-use crate::fut0lst;
-use crate::univ;
-use crate::ut0ut::UT_BITS_IN_BYTES;
+use crate::{fil0fil, fsp0types, fut0lst, univ, ut0ut::UT_BITS_IN_BYTES};
 
 /// @return the PAGE_SSIZE flags for the current innodb_page_size.
 #[allow(non_snake_case)]

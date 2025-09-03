@@ -1,8 +1,6 @@
 use std::fmt::Debug;
 
-use crate::fil0fil;
-use crate::mach;
-use crate::univ;
+use crate::{fil0fil, mach, univ};
 
 /** All persistent tablespaces have a smaller fil_space_t::id than this. */
 pub const SRV_SPACE_ID_UPPER_BOUND: u32 = 0xFFFFFFF0u32;

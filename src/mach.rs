@@ -19,6 +19,10 @@ pub fn mach_read_from_8(buf: &[u8]) -> u64 {
     E::read_u64(buf)
 }
 
+pub fn mach_write_to_2(mut buf: impl Write, value: u16) -> Result<()> {
+    buf.write_all(&value.to_be_bytes())
+}
+
 pub fn mach_write_to_4(mut buf: impl Write, value: u32) -> Result<()> {
     buf.write_all(&value.to_be_bytes())
 }

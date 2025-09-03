@@ -7,12 +7,7 @@ use std::{
 use anyhow::Context;
 use mmap_rs::{Mmap, MmapFlags, MmapOptions};
 
-use crate::fil0fil;
-use crate::fsp0fsp;
-use crate::fsp0types;
-use crate::mach;
-use crate::page_buf::PageBuf;
-use crate::page0page;
+use crate::{fil0fil, fsp0fsp, fsp0types, mach, page_buf::PageBuf, page0page};
 
 #[derive(Debug, Clone)]
 pub struct TablespaceReader<'a> {
@@ -71,7 +66,8 @@ impl<'a> TablespaceReader<'a> {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "Inconsistent tablespace ID in file, expected {fil_page_space_id} but found {fsp_header_space_id}",
+                    "Inconsistent tablespace ID in file, expected {fil_page_space_id} but found \
+                     {fsp_header_space_id}",
                 ),
             ));
         }
@@ -112,7 +108,8 @@ impl<'a> TablespaceReader<'a> {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!(
-                        "Inconsistent tablespace ID or flags in file, expected (space_id={}, flags={:#x}) but found (space_id={}, flags={:#x})",
+                        "Inconsistent tablespace ID or flags in file, expected (space_id={}, \
+                         flags={:#x}) but found (space_id={}, flags={:#x})",
                         self.space_id, self.flags, space_id, flags
                     ),
                 ));
@@ -167,7 +164,8 @@ impl<'a> TablespaceReader<'a> {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "InnoDB: Data file uses page size {}, but the innodb_page_size start-up parameter is {}",
+                    "InnoDB: Data file uses page size {}, but the innodb_page_size start-up \
+                     parameter is {}",
                     logical_size, self.page
                 ),
             ));
@@ -178,7 +176,8 @@ impl<'a> TablespaceReader<'a> {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "InnoDB: Header pages contains inconsistent data (page number is not 0), Space ID: {}, Flags: {}",
+                    "InnoDB: Header pages contains inconsistent data (page number is not 0), \
+                     Space ID: {}, Flags: {}",
                     self.space_id, self.flags
                 ),
             ));

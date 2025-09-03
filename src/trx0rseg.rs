@@ -2,11 +2,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use crate::fsp0types;
-use crate::fut0lst;
-use crate::mach;
-use crate::trx0sys::mysql_log_t;
-use crate::wsrep;
+use crate::{fsp0types, fut0lst, mach, trx0sys::mysql_log_t, wsrep};
 
 /// Number of undo log slots in a rollback segment file copy
 #[allow(non_snake_case)]

@@ -1,13 +1,12 @@
-use std::fmt::Debug;
-use std::fmt::Display;
-use std::io::Result;
-use std::ops::{Index, RangeFrom, RangeTo};
+use std::{
+    fmt::{Debug, Display},
+    io::{Read, Result},
+    ops::{Index, RangeFrom, RangeTo},
+};
 
-use crate::buf0buf;
-use crate::fil0fil;
-use crate::mach;
+use crc32c::crc32c;
 
-use crate::Lsn;
+use crate::{Lsn, buf0buf, fil0fil, fsp0types, fut0lst, mach, trx0undo};
 
 // TODO: support for compression and encryption
 #[derive(Clone)]
@@ -186,5 +185,141 @@ impl Display for PageBuf<'_> {
         s.field("page_type", &fil0fil::fil_page_type_t::from(self.page_type));
         s.field("checksum", &self.foot_checksum);
         s.finish()
+    }
+}
+
+pub fn make_undo_log_page(
+    page: &mut [u8],
+    space_id: u32,
+    page_no: u32,
+    page_lsn: Lsn,
+    flags: u32,
+) -> Result<()> {
+    assert!(fil0fil::full_crc32(flags));
+    assert!(fsp0types::FSP_FLAGS_GET_POST_ANTELOPE(flags) != 0);
+    assert!(fsp0types::FSP_FLAGS_HAS_PAGE_COMPRESSION(flags) == 0);
+
+    if flags != 0x15 {
+        // only support general tablespace without encryption and compression.
+        // just to be sure we didn't miss anything.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Unsupported tablespace flags: {:#x}", flags),
+        ));
+    }
+
+    let page_size = fil0fil::logical_size(flags) as usize;
+    assert_eq!(page.len(), page_size);
+
+    page.fill(0);
+
+    make_page_header(
+        page,
+        space_id,
+        page_no,
+        fil0fil::FIL_PAGE_UNDO_LOG,
+        page_lsn,
+        flags,
+    )?;
+    make_undo_log_page_header(&mut page[trx0undo::TRX_UNDO_PAGE_HDR as usize..])?;
+    make_page_footer(page)?;
+
+    Ok(())
+}
+
+pub fn make_page_header(
+    buf: &mut [u8],
+    space_id: u32,
+    page_no: u32,
+    page_type: u16,
+    page_lsn: Lsn,
+    flags: u32,
+) -> Result<()> {
+    assert_eq!(flags, 0x15);
+
+    mach::mach_write_to_4(&mut buf[fil0fil::FIL_PAGE_SPACE_OR_CHKSUM as usize..], 0)?; // 0
+    mach::mach_write_to_4(&mut buf[fil0fil::FIL_PAGE_OFFSET as usize..], page_no)?; // 4
+    mach::mach_write_to_4(
+        &mut buf[fil0fil::FIL_PAGE_PREV as usize..],
+        fil0fil::FIL_NULL,
+    )?; // 8
+    mach::mach_write_to_4(
+        &mut buf[fil0fil::FIL_PAGE_NEXT as usize..],
+        fil0fil::FIL_NULL,
+    )?; // 12
+    mach::mach_write_to_8(&mut buf[fil0fil::FIL_PAGE_LSN as usize..], page_lsn as u64)?; // 16
+    mach::mach_write_to_2(&mut buf[fil0fil::FIL_PAGE_TYPE as usize..], page_type)?; // 24
+    mach::mach_write_to_4(&mut buf[fil0fil::FIL_PAGE_SPACE_ID as usize..], space_id)?; // 34
+
+    // total length 38 bytes
+
+    Ok(())
+}
+
+pub fn make_undo_log_page_header(buf: &mut [u8]) -> Result<()> {
+    // trx_undo_page_t
+    mach::mach_write_to_2(&mut buf[trx0undo::TRX_UNDO_PAGE_TYPE as usize..], 0)?; // 0
+    mach::mach_write_to_2(
+        &mut buf[trx0undo::TRX_UNDO_PAGE_START as usize..],
+        trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
+    )?; // 2, 38 + 6 + 2 * 6 = 56
+    mach::mach_write_to_2(
+        &mut buf[trx0undo::TRX_UNDO_PAGE_FREE as usize..],
+        trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
+    )?; // 2, 38 + 6 + 2 * 6 = 56
+
+    let mut empty_page_node = fut0lst::flst_node_t::default();
+    empty_page_node.read(
+        &mut buf[trx0undo::TRX_UNDO_PAGE_NODE as usize
+            ..trx0undo::TRX_UNDO_PAGE_NODE as usize + fut0lst::FLST_NODE_SIZE as usize],
+    )?;
+
+    Ok(())
+}
+
+pub fn make_page_footer(page_buf: &mut [u8]) -> Result<()> {
+    let page_size = page_buf.len();
+
+    assert!(page_size.is_power_of_two());
+
+    let end_lsn_offset = page_size - fil0fil::FIL_PAGE_FCRC32_END_LSN as usize;
+    let checksum_offset = page_size - fil0fil::FIL_PAGE_FCRC32_CHECKSUM as usize;
+
+    let page_lsn = mach::mach_read_from_8(&page_buf[fil0fil::FIL_PAGE_LSN as usize..]) as u32;
+    mach::mach_write_to_4(&mut page_buf[end_lsn_offset..], page_lsn)?;
+
+    let crc32 = crc32c(&page_buf[..checksum_offset]);
+    mach::mach_write_to_4(&mut page_buf[checksum_offset..], crc32)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::PageBuf;
+    use crate::fil0fil;
+
+    #[test]
+    pub fn make_undo_log_page_test() {
+        let flags = 0x15u32; // general full crc32 tablespace without encryption and compression
+        let page_size = 16 * 1024;
+        let space_id = 1;
+        let page_no = 50;
+        let page_lsn = 789;
+
+        let mut page = vec![0u8; page_size];
+
+        super::make_undo_log_page(&mut page, space_id, page_no, page_lsn, flags).unwrap();
+
+        let page = PageBuf::new(0x15, &page);
+
+        assert_eq!(page.space_id, space_id);
+        assert_eq!(page.page_no, page_no);
+        assert_eq!(page.page_lsn, page_lsn);
+        assert_eq!(page.page_type, fil0fil::FIL_PAGE_UNDO_LOG);
+        assert_eq!(page.head_checksum, 0);
+        assert_eq!(page.foot_lsn, page_lsn as u32);
+
+        page.corrupted(Some(789)).unwrap();
     }
 }

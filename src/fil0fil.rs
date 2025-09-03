@@ -1,8 +1,6 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, io::Read};
 
-use crate::fsp0types;
-use crate::mach;
-use crate::univ;
+use crate::{fsp0types, mach, univ};
 
 /// Common InnoDB file extensions
 #[allow(non_camel_case_types)]
@@ -41,6 +39,31 @@ impl fil_addr_t {
         let page = mach::mach_read_from_4(&buf[0..]);
         let boffset = mach::mach_read_from_2(&buf[4..]);
         fil_addr_t { page, boffset }
+    }
+}
+
+impl Default for fil_addr_t {
+    fn default() -> Self {
+        fil_addr_t {
+            page: FIL_NULL,
+            boffset: 0,
+        }
+    }
+}
+
+impl Read for fil_addr_t {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.len() < FIL_ADDR_SIZE as usize {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Buffer too small, need at least {} bytes", FIL_ADDR_SIZE),
+            ));
+        }
+
+        mach::mach_write_to_4(&mut buf[FIL_ADDR_PAGE as usize..], self.page)?;
+        mach::mach_write_to_2(&mut buf[FIL_ADDR_BYTE as usize..], self.boffset)?;
+
+        Ok(FIL_ADDR_SIZE as usize)
     }
 }
 

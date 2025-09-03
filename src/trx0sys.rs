@@ -1,8 +1,6 @@
 use std::fmt::Debug;
 
-use crate::fsp0types;
-use crate::mach;
-use crate::wsrep;
+use crate::{fsp0types, mach, wsrep};
 
 // The offset of the transaction system header on the page
 pub const TRX_SYS: u32 = fsp0types::FSEG_PAGE_DATA;

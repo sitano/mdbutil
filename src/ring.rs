@@ -1,8 +1,7 @@
 use std::{
     cmp::min,
     io::{Error, ErrorKind, Read, Result, Seek, Write},
-    ops::Add,
-    ops::Index,
+    ops::{Add, Index},
 };
 
 use crc32c::crc32c;

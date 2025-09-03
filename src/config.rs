@@ -1,5 +1,4 @@
-use std::io::Result;
-use std::path::PathBuf;
+use std::{io::Result, path::PathBuf};
 
 use clap::Parser;
 

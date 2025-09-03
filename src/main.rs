@@ -1,22 +1,29 @@
-use std::io::{Seek, Write};
-use std::path::PathBuf;
+use std::{
+    io::{Seek, Write},
+    path::PathBuf,
+};
 
 use clap::Parser;
-
-use mdbutil::fil0fil::tablespace_flags_to_string;
-use mdbutil::fil0fil::{
-    FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS, FIL_PAGE_UNDO_LOG,
+use mdbutil::{
+    Lsn,
+    config::Config,
+    fil0fil::{
+        FIL_PAGE_TYPE_FSP_HDR, FIL_PAGE_TYPE_SYS, FIL_PAGE_TYPE_TRX_SYS, FIL_PAGE_UNDO_LOG,
+        tablespace_flags_to_string,
+    },
+    fsp0fsp::fsp_header_t,
+    fsp0types::FSP_TRX_SYS_PAGE_NO,
+    log,
+    log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader},
+    mtr::Mtr,
+    mtr0types::MtrOperation,
+    page_buf::PageBuf,
+    ring,
+    tablespace::{MmapTablespaceReader, TablespaceReader},
+    trx0rseg::trx_rseg_t,
+    trx0sys::{trx_sys_rseg_t, trx_sys_t},
+    trx0undo::trx_undo_page_t,
 };
-use mdbutil::fsp0fsp::fsp_header_t;
-use mdbutil::fsp0types::FSP_TRX_SYS_PAGE_NO;
-use mdbutil::log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader};
-use mdbutil::page_buf::PageBuf;
-use mdbutil::tablespace::{MmapTablespaceReader, TablespaceReader};
-use mdbutil::trx0rseg::trx_rseg_t;
-use mdbutil::trx0sys::trx_sys_rseg_t;
-use mdbutil::trx0sys::trx_sys_t;
-use mdbutil::trx0undo::trx_undo_page_t;
-use mdbutil::{Lsn, config::Config, log, mtr::Mtr, mtr0types::MtrOperation, ring};
 
 #[derive(Parser)]
 enum Cli {
@@ -312,7 +319,8 @@ impl ReadTablespaceCommand {
         let reader: TablespaceReader<'_> = mmap_reader.reader()?;
 
         println!(
-            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, flags: {}",
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, \
+             flags: {}",
             file_path.display(),
             mmap_reader.mmap().len(),
             page_size,
@@ -477,7 +485,8 @@ impl ReadPageCommand {
         }
 
         println!(
-            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, flags: {}",
+            "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, \
+             flags: {}",
             file_path.display(),
             mmap_reader.mmap().len(),
             page_size,

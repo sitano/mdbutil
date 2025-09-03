@@ -1,7 +1,4 @@
-use crate::fil0fil;
-use crate::mach;
-use crate::univ;
-use crate::ut0byte;
+use crate::{fil0fil, mach, univ, ut0byte};
 
 /// Get the start of a page frame.
 ///

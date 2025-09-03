@@ -2,12 +2,7 @@ use std::io::{Error, ErrorKind, Result};
 
 use crc32c::crc32c;
 
-use crate::fil0fil;
-use crate::mach;
-
-use crate::Lsn;
-use crate::log::FIRST_LSN;
-use crate::page_buf::PageBuf;
+use crate::{Lsn, fil0fil, log::FIRST_LSN, mach, page_buf::PageBuf};
 
 /// Check whether a page is newer than the durable LSN.
 /// Returns whether the FIL_PAGE_LSN is invalid (ahead of the durable LSN).
@@ -32,7 +27,8 @@ pub fn buf_page_check_lsn(page: &PageBuf, current_lsn: Lsn) -> Result<()> {
     Err(Error::new(
         ErrorKind::InvalidData,
         format!(
-            "InnoDB: Page [page id: space={}, page number={}] log sequence number {} is in the future! Current system log sequence number {}.",
+            "InnoDB: Page [page id: space={}, page number={}] log sequence number {} is in the \
+             future! Current system log sequence number {}.",
             space_id, page_no, page_lsn, current_lsn
         ),
     ))

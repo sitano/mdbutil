@@ -1,9 +1,6 @@
 use std::fmt::Debug;
 
-use crate::fsp0types;
-use crate::fut0lst;
-use crate::univ;
-use crate::wsrep;
+use crate::{fsp0types, fut0lst, univ, wsrep};
 
 // Transaction undo log
 // -------------------------------------------------------------

@@ -1,7 +1,6 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, io::Read};
 
-use crate::fil0fil;
-use crate::mach;
+use crate::{fil0fil, mach};
 
 /// The physical size of a list base node in bytes.
 pub const FLST_BASE_NODE_SIZE: u32 = 4 + 2 * fil0fil::FIL_ADDR_SIZE;
@@ -34,6 +33,21 @@ impl flst_base_node_t {
     }
 }
 
+impl Read for flst_base_node_t {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        assert!(buf.len() >= FLST_BASE_NODE_SIZE as usize);
+
+        mach::mach_write_to_4(&mut buf[0..], self.len)?;
+
+        self.first
+            .read(&mut buf[4..4 + fil0fil::FIL_ADDR_SIZE as usize])?;
+        self.last
+            .read(&mut buf[4 + fil0fil::FIL_ADDR_SIZE as usize..])?;
+
+        Ok(FLST_BASE_NODE_SIZE as usize)
+    }
+}
+
 impl flst_node_t {
     /// Reads a list node from the given buffer.
     /// The buffer must be at least `FLST_NODE_SIZE` bytes long.
@@ -42,6 +56,38 @@ impl flst_node_t {
         let prev = fil0fil::fil_addr_t::from_buf(&buf[0..]);
         let next = fil0fil::fil_addr_t::from_buf(&buf[fil0fil::FIL_ADDR_SIZE as usize..]);
         flst_node_t { prev, next }
+    }
+}
+
+impl Default for flst_node_t {
+    fn default() -> Self {
+        flst_node_t {
+            prev: fil0fil::fil_addr_t::default(),
+            next: fil0fil::fil_addr_t::default(),
+        }
+    }
+}
+
+impl Read for flst_node_t {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        assert!(buf.len() >= FLST_NODE_SIZE as usize);
+
+        self.prev
+            .read(&mut buf[0..fil0fil::FIL_ADDR_SIZE as usize])?;
+        self.next
+            .read(&mut buf[fil0fil::FIL_ADDR_SIZE as usize..])?;
+
+        Ok(FLST_NODE_SIZE as usize)
+    }
+}
+
+impl Default for flst_base_node_t {
+    fn default() -> Self {
+        flst_base_node_t {
+            len: 0,
+            first: fil0fil::fil_addr_t::default(),
+            last: fil0fil::fil_addr_t::default(),
+        }
     }
 }
 
