@@ -728,8 +728,8 @@ impl CleanUndoCommand {
         print!("Cleaning undo log pages: ");
         let space_id = reader.space_id();
         let flags = reader.flags();
+        let mut writer: TablespaceWriter<'_> = mmap_writer.writer()?;
         for (page_no, _) in pages.iter().enumerate().filter(|(_page_id, p)| **p == 1) {
-            let mut writer: TablespaceWriter<'_> = mmap_writer.writer()?;
             let page_buf = &mut writer.page_buf(page_no as u32)?;
             let page_lsn = PageBuf::read_page_lsn(page_buf);
 

@@ -437,7 +437,7 @@ impl<'a> TablespaceWriter<'a> {
         }
     }
 
-    pub fn page_buf(&'a mut self, page_no: u32) -> Result<&'a mut [u8]> {
+    pub fn page_buf(&mut self, page_no: u32) -> Result<&mut [u8]> {
         let pos = (page_no as usize)
             .checked_mul(self.page_size)
             .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "page_id overflow"))?;
