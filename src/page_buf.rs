@@ -52,7 +52,7 @@ impl<'a> PageBuf<'a> {
         let page_no = mach::mach_read_from_4(&buf[fil0fil::FIL_PAGE_OFFSET as usize..]); // 4
         let prev_page = mach::mach_read_from_4(&buf[fil0fil::FIL_PAGE_PREV as usize..]); // 8
         let next_page = mach::mach_read_from_4(&buf[fil0fil::FIL_PAGE_NEXT as usize..]); // 12
-        let page_lsn = mach::mach_read_from_8(&buf[fil0fil::FIL_PAGE_LSN as usize..]) as Lsn; // 16
+        let page_lsn = Self::read_page_lsn(buf); // 16
         let page_type = mach::mach_read_from_2(&buf[fil0fil::FIL_PAGE_TYPE as usize..]); // 24
         let space_id = mach::mach_read_from_4(&buf[fil0fil::FIL_PAGE_SPACE_ID as usize..]); // 34
 
@@ -112,6 +112,10 @@ impl<'a> PageBuf<'a> {
 
     pub fn read_8(&self, offset: usize) -> u64 {
         mach::mach_read_from_8(&self.buf[offset..])
+    }
+
+    pub fn read_page_lsn(buf: &[u8]) -> Lsn {
+        mach::mach_read_from_8(&buf[fil0fil::FIL_PAGE_LSN as usize..]) as Lsn
     }
 }
 
@@ -227,6 +231,7 @@ pub fn make_undo_log_page(
     Ok(())
 }
 
+// TODO: write trait
 pub fn make_page_header(
     buf: &mut [u8],
     space_id: u32,
@@ -256,16 +261,17 @@ pub fn make_page_header(
     Ok(())
 }
 
+// TODO: write trait
 pub fn make_undo_log_page_header(buf: &mut [u8]) -> Result<()> {
     // trx_undo_page_t
     mach::mach_write_to_2(&mut buf[trx0undo::TRX_UNDO_PAGE_TYPE as usize..], 0)?; // 0
     mach::mach_write_to_2(
         &mut buf[trx0undo::TRX_UNDO_PAGE_START as usize..],
-        trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
+        trx0undo::TRX_UNDO_PAGE_HDR as u16 + trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
     )?; // 2, 38 + 6 + 2 * 6 = 56
     mach::mach_write_to_2(
         &mut buf[trx0undo::TRX_UNDO_PAGE_FREE as usize..],
-        trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
+        trx0undo::TRX_UNDO_PAGE_HDR as u16 + trx0undo::TRX_UNDO_PAGE_HDR_SIZE as u16,
     )?; // 2, 38 + 6 + 2 * 6 = 56
 
     let mut empty_page_node = fut0lst::flst_node_t::default();

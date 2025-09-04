@@ -40,6 +40,10 @@ impl fil_addr_t {
         let boffset = mach::mach_read_from_2(&buf[4..]);
         fil_addr_t { page, boffset }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.page == FIL_NULL
+    }
 }
 
 impl Default for fil_addr_t {

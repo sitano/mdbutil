@@ -3,6 +3,7 @@
 use std::{
     fmt::Display,
     io::{Error, ErrorKind, Result},
+    ops::Range,
     path::Path,
 };
 
@@ -370,6 +371,16 @@ impl MmapTablespaceWriter {
         self.m.len()
     }
 
+    pub fn flush(&self, range: Range<usize>) -> anyhow::Result<()> {
+        self.m.flush(range)?;
+        Ok(())
+    }
+
+    pub fn flush_all(&self) -> anyhow::Result<()> {
+        self.m.flush(0..self.len())?;
+        Ok(())
+    }
+
     pub fn reader(&self) -> anyhow::Result<TablespaceReader<'_>> {
         let mut reader = TablespaceReader::new(self.m.as_slice(), self.page);
 
@@ -399,6 +410,7 @@ impl MmapTablespaceWriter {
     }
 }
 
+// TODO: implement Writer+Seek
 #[derive(Debug)]
 pub struct TablespaceWriter<'a> {
     buf: &'a mut [u8],

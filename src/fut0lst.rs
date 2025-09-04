@@ -33,6 +33,10 @@ impl flst_base_node_t {
         let last = fil0fil::fil_addr_t::from_buf(&buf[4 + fil0fil::FIL_ADDR_SIZE as usize..]);
         flst_base_node_t { len, first, last }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 impl Read for flst_base_node_t {
@@ -58,6 +62,10 @@ impl flst_node_t {
         let prev = fil0fil::fil_addr_t::from_buf(&buf[0..]);
         let next = fil0fil::fil_addr_t::from_buf(&buf[fil0fil::FIL_ADDR_SIZE as usize..]);
         flst_node_t { prev, next }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.prev.is_empty() && self.next.is_empty()
     }
 }
 

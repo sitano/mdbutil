@@ -17,9 +17,9 @@ use mdbutil::{
     log::{CHECKPOINT_1, CHECKPOINT_2, Redo, RedoHeader},
     mtr::Mtr,
     mtr0types::MtrOperation,
-    page_buf::PageBuf,
+    page_buf::{PageBuf, make_undo_log_page},
     ring,
-    tablespace::{MmapTablespaceReader, MmapTablespaceWriter, TablespaceReader},
+    tablespace::{MmapTablespaceReader, MmapTablespaceWriter, TablespaceReader, TablespaceWriter},
     trx0rseg::trx_rseg_t,
     trx0sys::{trx_sys_rseg_t, trx_sys_t},
     trx0undo::trx_undo_page_t,
@@ -126,6 +126,13 @@ struct CleanUndoCommand {
         default_value = "16384"
     )]
     pub page_size: usize,
+
+    #[clap(
+        long = "dry-run",
+        help = "Do not modify the file",
+        default_value_t = false
+    )]
+    pub dry_run: bool,
 }
 
 fn main() {
@@ -423,7 +430,20 @@ impl ReadTablespaceCommand {
         println!("{rseg:#?}");
 
         for (slot, page_no) in &rseg.undo_slots {
-            let page: PageBuf<'_> = reader.page(*page_no)?;
+            if *page_no == 0 || *page_no == 0xFFFFFFFF {
+                continue;
+            }
+
+            let page: PageBuf<'_> = match reader.page(*page_no) {
+                Ok(page) => page,
+                Err(err) => {
+                    eprintln!(
+                        "ERROR: Failed to read undo log page {} referenced from slot {}: {err}",
+                        page_no, slot
+                    );
+                    continue;
+                }
+            };
 
             self.read_undo_page(reader, *slot, &page)?;
         }
@@ -553,7 +573,7 @@ impl CleanUndoCommand {
             MmapTablespaceWriter::open(file_path, page_size)?;
         let num_pages = mmap_writer.len() / page_size;
 
-        let mut reader: TablespaceReader<'_> = mmap_writer.reader()?;
+        let reader: TablespaceReader<'_> = mmap_writer.reader()?;
 
         println!(
             "Opened tablespace file: {} with size: {} bytes, page size: {} bytes, num pages: {}, \
@@ -570,6 +590,8 @@ impl CleanUndoCommand {
         let mut allocated = 0usize;
 
         // scan pages
+        // 1. find all trx_rseg pages
+        // 2. find all undo log pages - candidates for cleanup
         for page_no in 0..num_pages as u32 {
             pages.push(0u8);
 
@@ -593,7 +615,134 @@ impl CleanUndoCommand {
             pages.iter().filter(|p| **p == 1).count(),
             allocated,
         );
+
         println!("Found {:?} trx_rseg pages", trx_rseg_pages);
+
+        // scan trx_rseg pages to find used undo log pages
+        // and remove them from candidates.
+        let mut errors = 0usize;
+        for page_no in trx_rseg_pages {
+            let page: PageBuf<'_> = reader.page(page_no)?;
+
+            assert_eq!(page.page_type, FIL_PAGE_TYPE_SYS);
+
+            let rseg = trx_rseg_t::from_page(&page);
+
+            if rseg.history_size != 0 {
+                errors += 1;
+
+                eprintln!(
+                    "ERROR: trx_rseg_t at page {} has non-zero history_size: {} - can't filter \
+                     them out. to be implemented.",
+                    page_no, rseg.history_size
+                );
+            }
+
+            if !rseg.history.is_empty() && rseg.history.len != rseg.history_size {
+                errors += 1;
+
+                eprintln!(
+                    "ERROR: trx_rseg_t at page {} has non-empty history - can't filter them out. \
+                     to be implemented.",
+                    page_no
+                );
+            }
+
+            // TODO: fseg
+
+            for undo_page_no in rseg.undo_slots.values() {
+                if *undo_page_no == 0 || *undo_page_no == 0xFFFFFFFF {
+                    continue;
+                }
+
+                if *undo_page_no >= num_pages as u32 {
+                    errors += 1;
+
+                    eprintln!(
+                        "WARNING: trx_rseg_t at page {} has invalid undo log page number {} - out \
+                         of range.",
+                        page_no, undo_page_no
+                    );
+
+                    continue;
+                }
+
+                // mark undo log page as used
+                pages[*undo_page_no as usize] = 0;
+
+                let undo_page: PageBuf<'_> = reader.page(*undo_page_no)?;
+
+                assert_eq!(undo_page.page_type, FIL_PAGE_UNDO_LOG);
+
+                let undo_page = trx_undo_page_t::from_page(&undo_page);
+
+                if undo_page.start != undo_page.free {
+                    errors += 1;
+
+                    eprintln!(
+                        "ERROR: trx_undo_page_t at page {} has used space (start: {}, free: {}). \
+                         - can't filter them out. to be implemented. for now we expect all undo \
+                         logs to be empty.",
+                        undo_page_no, undo_page.start, undo_page.free
+                    );
+                }
+
+                if !undo_page.node.is_empty() {
+                    errors += 1;
+
+                    eprintln!(
+                        "ERROR: trx_undo_page_t at page {} has non-empty node - can't filter them \
+                         out. to be implemented. for now we expect all undo logs to be empty.",
+                        undo_page_no
+                    );
+                }
+            }
+        }
+
+        let pages_to_clean = pages.iter().filter(|p| **p == 1).count();
+        println!(
+            "After scanning trx_rseg pages, {} undo log pages are still candidates for cleanup",
+            pages_to_clean,
+        );
+
+        if errors != 0 {
+            eprintln!(
+                "ERROR: found {errors} errors - aborting. Ensure database was cleanly shutdown \
+                 with --innodb_fast_shutdown=0 with full data purge."
+            );
+
+            return Err(anyhow::anyhow!("Aborting due to errors."));
+        }
+
+        if self.dry_run {
+            println!("Dry run - not modifying the file.");
+            return Ok(());
+        }
+
+        if pages_to_clean == 0 {
+            println!("No pages to clean - exiting.");
+            return Ok(());
+        }
+
+        // rewrite all candidate pages
+        print!("Cleaning undo log pages: ");
+        let space_id = reader.space_id();
+        let flags = reader.flags();
+        for (page_no, _) in pages.iter().enumerate().filter(|(_page_id, p)| **p == 1) {
+            let mut writer: TablespaceWriter<'_> = mmap_writer.writer()?;
+            let page_buf = &mut writer.page_buf(page_no as u32)?;
+            let page_lsn = PageBuf::read_page_lsn(page_buf);
+
+            make_undo_log_page(page_buf, space_id, page_no as u32, page_lsn, flags)?;
+
+            let page_test: PageBuf<'_> = PageBuf::new(flags, page_buf);
+            page_test.corrupted(Some(page_lsn))?;
+
+            print!("{} ", page_no);
+        }
+        println!();
+
+        mmap_writer.flush_all()?;
 
         Ok(())
     }

@@ -87,10 +87,15 @@ pub const TRX_RSEG_WSREP_XID_DATA: u32 = TRX_RSEG_WSREP_XID_INFO + 12;
 #[allow(non_camel_case_types)]
 pub struct trx_rseg_t {
     pub format: u32,
+    /// Number of pages in the TRX_RSEG_HISTORY list
     pub history_size: u32,
+    /// Committed transaction logs that have not been purged yet
     pub history: fut0lst::flst_base_node_t,
+    /// Header for the file segment where this page is placed
     pub fseg_header: fsp0types::fseg_header_t,
+    /// Undo log segment slots
     pub undo_slots: HashMap<u32, u32>, // slot number -> page number
+    /// Maximum transaction ID (valid only if TRX_RSEG_FORMAT is 0)
     pub max_trx_id: u64,
     pub mysql_log: Option<mysql_log_t>,
     pub wsrep_xid: Option<wsrep::wsrep_xid_t>,
@@ -206,7 +211,7 @@ impl Debug for trx_rseg_t {
         let mut slots = self
             .undo_slots
             .iter()
-            .filter(|(_slot, page)| **page < 0xFFFFFFFF)
+            .filter(|(_slot, page)| **page > 0 && **page < 0xFFFFFFFF)
             .map(|(s, p)| UndoSlotPrinter(*s, *p))
             .collect::<Vec<_>>();
 
